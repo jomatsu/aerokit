@@ -125,7 +125,23 @@ public enum WorkspaceComposer {
         makeCanvas(width: Int(canvasSize.width), height: Int(canvasSize.height))?.makeImage()
     }
 
-    // MARK: - PNG I/O
+    // MARK: - Image I/O
+
+    /// Per-window captures are thumbnail material, so lossy JPEG keeps the
+    /// encode fast and the files small; overviews stay PNG.
+    public static func writeJPEG(_ image: CGImage, to url: URL, quality: Double = 0.85) -> Bool {
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        ) else {
+            return false
+        }
+        let options = [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary
+        CGImageDestinationAddImage(destination, image, options)
+        return CGImageDestinationFinalize(destination)
+    }
 
     public static func writePNG(_ image: CGImage, to url: URL) -> Bool {
         guard let destination = CGImageDestinationCreateWithURL(

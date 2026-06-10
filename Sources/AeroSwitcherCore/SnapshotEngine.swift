@@ -29,12 +29,40 @@ public final class SnapshotEngine: Sendable {
         var window: WorkspaceWindow
         var status: SnapshotStatus
         var composeImage: CGImage?
+        var relativePath: String
     }
 
     /// SCWindow is not Sendable, but these are immutable snapshots that the
     /// capture tasks only read.
     private struct ShareableWindows: @unchecked Sendable {
         let byID: [CGWindowID: SCWindow]
+    }
+
+    /// The SCShareableContent query (~70ms wall + replayd CPU) is only
+    /// needed by the ScreenCaptureKit fallback, so it starts on first use;
+    /// runs where every fast-path capture succeeds never pay for it.
+    private actor LazyShareableWindows {
+        private let capturer: WindowImageCapturer
+        private var task: Task<ShareableWindows, Never>?
+
+        init(capturer: WindowImageCapturer) {
+            self.capturer = capturer
+        }
+
+        func all() async -> ShareableWindows {
+            let resolved = task ?? Task { [capturer] in
+                await ShareableWindows(byID: (try? capturer.shareableWindows()) ?? [:])
+            }
+            task = resolved
+            return await resolved.value
+        }
+    }
+
+    /// Per-batch capture inputs, resolved once before the task group starts.
+    private struct CaptureContext {
+        let shareable: LazyShareableWindows
+        let boundsByID: [CGWindowID: CGSize]
+        let displayScale: CGFloat
     }
 
     private let configuration: SwitcherConfiguration
@@ -44,7 +72,15 @@ public final class SnapshotEngine: Sendable {
         .default
     }
 
-    private let maxConcurrentCaptures = 4
+    /// The fast path is pure in-process work (no replayd serialization), so
+    /// the batch is bounded by CPU rather than the capture service.
+    private let maxConcurrentCaptures = 8
+
+    /// Compose cells are at most ~800pt wide, so captures are requested at
+    /// this size and full-resolution pixels never enter the pipeline.
+    private static let composeImageMaxDimension: CGFloat = 800
+
+    private let composeImageCache = ComposeImageCache(maxDimension: SnapshotEngine.composeImageMaxDimension)
 
     public init(configuration: SwitcherConfiguration, client: AeroSpaceClient) {
         self.configuration = configuration
@@ -66,8 +102,8 @@ public final class SnapshotEngine: Sendable {
 
         let rootURL = URL(fileURLWithPath: configuration.snapshotRootPath, isDirectory: true)
         let runID = Self.runIDFormatter.string(from: Date())
-        let previousDirectory = resolveCurrentDirectory(in: rootURL)
-        let previousWorkspaces = workspacesInManifest(at: previousDirectory)
+        let previousRun = PreviousSnapshotRun.load(fromManifestIn: resolveCurrentDirectory(in: rootURL))
+        composeImageCache.prune(keeping: Set(windows.map(\.id)))
 
         let temporaryDirectory = rootURL.appendingPathComponent(
             ".next-\(runID)-\(UUID().uuidString.prefix(6))",
@@ -99,7 +135,7 @@ public final class SnapshotEngine: Sendable {
         let results = await captureWindows(
             windows,
             into: temporaryDirectory,
-            previousDirectory: previousDirectory,
+            previousRun: previousRun,
             onProgress: onProgress
         )
 
@@ -112,8 +148,7 @@ public final class SnapshotEngine: Sendable {
             workspaces: workspaces,
             results: results,
             outputDirectory: temporaryDirectory,
-            previousDirectory: previousDirectory,
-            previousWorkspaces: previousWorkspaces
+            previousRun: previousRun
         )
 
         try writeManifest(results: results, in: temporaryDirectory, finalDirectory: finalDirectory)
@@ -128,11 +163,14 @@ public final class SnapshotEngine: Sendable {
     private func captureWindows(
         _ windows: [WorkspaceWindow],
         into outputDirectory: URL,
-        previousDirectory: URL?,
+        previousRun: PreviousSnapshotRun,
         onProgress: (@Sendable (Int, Int) -> Void)?
     ) async -> [WindowResult] {
-        let shareable = await ShareableWindows(byID: (try? capturer.shareableWindows()) ?? [:])
-        let displayScale = await capturer.maximumDisplayScale()
+        let context = await CaptureContext(
+            shareable: LazyShareableWindows(capturer: capturer),
+            boundsByID: capturer.windowBoundsByID(),
+            displayScale: capturer.maximumDisplayScale()
+        )
 
         onProgress?(0, windows.count)
         var completed = 0
@@ -150,10 +188,9 @@ public final class SnapshotEngine: Sendable {
                 group.addTask {
                     let result = await self.captureWindow(
                         window,
-                        shareable: shareable,
-                        displayScale: displayScale,
+                        context: context,
                         outputDirectory: outputDirectory,
-                        previousDirectory: previousDirectory
+                        previousEntry: previousRun.entriesByWindowID[window.id]
                     )
                     return (index, result)
                 }
@@ -175,24 +212,38 @@ public final class SnapshotEngine: Sendable {
 
     private func captureWindow(
         _ window: WorkspaceWindow,
-        shareable: ShareableWindows,
-        displayScale: CGFloat,
+        context: CaptureContext,
         outputDirectory: URL,
-        previousDirectory: URL?
+        previousEntry: PreviousSnapshotRun.Entry?
     ) async -> WindowResult {
-        let fileURL = outputDirectory.appendingPathComponent(relativeCapturePath(for: window))
-        let previousURL = previousDirectory?.appendingPathComponent(relativeCapturePath(for: window))
+        let relativePath = relativeCapturePath(for: window)
+        let fileURL = outputDirectory.appendingPathComponent(relativePath)
 
         func reuseOrFail(_ status: SnapshotStatus) -> WindowResult {
-            reusePrevious(window: window, previousURL: previousURL, fileURL: fileURL)
-                ?? WindowResult(window: window, status: status, composeImage: nil)
+            reusePrevious(window: window, previousEntry: previousEntry, outputDirectory: outputDirectory)
+                ?? WindowResult(window: window, status: status, composeImage: nil, relativePath: relativePath)
         }
 
-        guard let windowID = CGWindowID(window.id), let scWindow = shareable.byID[windowID] else {
+        guard let windowID = CGWindowID(window.id) else {
             return reuseOrFail(.failed)
         }
 
-        guard let image = try? await capturer.captureImage(of: scWindow, scale: displayScale) else {
+        // CGWindowListCreateImage first (~9ms/window); ScreenCaptureKit only
+        // when it yields nothing, since SCScreenshotManager costs ~105ms per
+        // window and serializes in replayd.
+        var captured = capturer.captureImageFast(
+            windowID: windowID,
+            maxDimension: Self.composeImageMaxDimension,
+            pointSize: context.boundsByID[windowID]
+        )
+        if captured == nil, let scWindow = await context.shareable.all().byID[windowID] {
+            captured = try? await capturer.captureImage(
+                of: scWindow,
+                displayScale: context.displayScale,
+                maxDimension: Self.composeImageMaxDimension
+            )
+        }
+        guard let image = captured else {
             return reuseOrFail(.failed)
         }
 
@@ -200,49 +251,42 @@ public final class SnapshotEngine: Sendable {
             return reuseOrFail(.failedBlack)
         }
 
-        guard WorkspaceComposer.writePNG(image, to: fileURL) else {
-            return WindowResult(window: window, status: .failed, composeImage: nil)
+        guard WorkspaceComposer.writeJPEG(image, to: fileURL) else {
+            return WindowResult(window: window, status: .failed, composeImage: nil, relativePath: relativePath)
         }
 
-        return WindowResult(window: window, status: .captured, composeImage: downsampled(image))
+        composeImageCache.store(image, forWindowID: window.id, sourceURL: fileURL)
+        return WindowResult(window: window, status: .captured, composeImage: image, relativePath: relativePath)
     }
 
-    private func reusePrevious(window: WorkspaceWindow, previousURL: URL?, fileURL: URL) -> WindowResult? {
-        guard let previousURL,
-              fileManager.fileExists(atPath: previousURL.path),
-              let image = WorkspaceComposer.loadImage(at: previousURL),
-              !WorkspaceComposer.isBlackish(image)
+    /// The previous manifest already vouches for the file (only non-black,
+    /// successful captures are ever written), so reuse trusts its status and
+    /// skips re-decoding for validation.
+    private func reusePrevious(
+        window: WorkspaceWindow,
+        previousEntry: PreviousSnapshotRun.Entry?,
+        outputDirectory: URL
+    ) -> WindowResult? {
+        guard let previousEntry,
+              previousEntry.status.isUsable,
+              fileManager.fileExists(atPath: previousEntry.fileURL.path),
+              let image = composeImageCache.image(forWindowID: window.id, at: previousEntry.fileURL)
         else {
             return nil
         }
 
-        try? fileManager.copyItem(at: previousURL, to: fileURL)
-        return WindowResult(window: window, status: .cached, composeImage: downsampled(image))
+        // Keep the source extension: runs that predate the JPEG switch
+        // carry PNG captures forward.
+        let fileExtension = previousEntry.fileURL.pathExtension.isEmpty ? "png" : previousEntry.fileURL.pathExtension
+        let relativePath = relativeCapturePath(for: window, fileExtension: fileExtension)
+        try? fileManager.copyItem(at: previousEntry.fileURL, to: outputDirectory.appendingPathComponent(relativePath))
+        return WindowResult(window: window, status: .cached, composeImage: image, relativePath: relativePath)
     }
 
-    private func relativeCapturePath(for window: WorkspaceWindow) -> String {
+    private func relativeCapturePath(for window: WorkspaceWindow, fileExtension: String = "jpg") -> String {
         let directory = WorkspaceName.captureDirectoryName(window.workspace)
         let app = WorkspaceName.sanitizedFileStem(window.appName.isEmpty ? "window" : window.appName)
-        return "\(directory)/window-\(window.id)-\(app).png"
-    }
-
-    /// Compose cells are at most ~800pt wide, so keep a small copy for
-    /// composition and let the full-resolution capture live on disk only.
-    private func downsampled(_ image: CGImage, maxDimension: CGFloat = 800) -> CGImage {
-        let size = CGSize(width: image.width, height: image.height)
-        let scale = min(1, maxDimension / max(size.width, size.height))
-        guard scale < 1,
-              let context = WorkspaceComposer.makeContext(
-                  width: Int((size.width * scale).rounded()),
-                  height: Int((size.height * scale).rounded())
-              )
-        else {
-            return image
-        }
-
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: context.width, height: context.height))
-        return context.makeImage() ?? image
+        return "\(directory)/window-\(window.id)-\(app).\(fileExtension)"
     }
 
     // MARK: - Compose
@@ -251,28 +295,30 @@ public final class SnapshotEngine: Sendable {
         workspaces: [String],
         results: [WindowResult],
         outputDirectory: URL,
-        previousDirectory: URL?,
-        previousWorkspaces: Set<String>
+        previousRun: PreviousSnapshotRun
     ) {
         let resultsByWorkspace = Dictionary(grouping: results, by: \.window.workspace)
 
-        for workspace in workspaces {
+        // Each overview draws and encodes independently (~20ms each), so the
+        // canvases render in parallel instead of serially.
+        DispatchQueue.concurrentPerform(iterations: workspaces.count) { index in
+            let workspace = workspaces[index]
             let fileName = WorkspaceName.overviewFileName(workspace)
             let outputURL = outputDirectory.appendingPathComponent(fileName)
             let workspaceResults = resultsByWorkspace[workspace] ?? []
             let images = workspaceResults.compactMap { $0.status.isUsable ? $0.composeImage : nil }
 
             if images.isEmpty {
-                let previousOverview = previousDirectory?.appendingPathComponent(fileName)
-                let hadNoWindowsBefore = !previousWorkspaces.contains(workspace)
+                let previousOverview = previousRun.directory?.appendingPathComponent(fileName)
+                let hadNoWindowsBefore = !previousRun.workspaces.contains(workspace)
                 if hadNoWindowsBefore, let previousOverview, fileManager.fileExists(atPath: previousOverview.path) {
                     try? fileManager.copyItem(at: previousOverview, to: outputURL)
-                    continue
+                    return
                 }
                 if let empty = WorkspaceComposer.emptyOverview(canvasSize: configuration.snapshotComposeSize) {
                     _ = WorkspaceComposer.writePNG(empty, to: outputURL)
                 }
-                continue
+                return
             }
 
             let rootLayout = workspaceResults.first?.window.workspaceRootContainerLayout ?? ""
@@ -308,7 +354,7 @@ public final class SnapshotEngine: Sendable {
                 result.window.layout,
                 result.window.parentContainerLayout,
                 result.window.workspaceRootContainerLayout,
-                finalDirectory.appendingPathComponent(relativeCapturePath(for: result.window)).path,
+                finalDirectory.appendingPathComponent(result.relativePath).path,
                 result.status.rawValue
             ].joined(separator: "\t")
         }
@@ -321,26 +367,6 @@ public final class SnapshotEngine: Sendable {
         value
             .replacingOccurrences(of: "\t", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
-    }
-
-    private func workspacesInManifest(at directory: URL?) -> Set<String> {
-        guard let directory,
-              let contents = try? String(
-                  contentsOf: directory.appendingPathComponent("manifest.tsv"),
-                  encoding: .utf8
-              )
-        else {
-            return []
-        }
-
-        let workspaces = contents
-            .split(whereSeparator: \.isNewline)
-            .dropFirst()
-            .compactMap { line -> String? in
-                let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
-                return fields.count > 1 ? String(fields[1]) : nil
-            }
-        return Set(workspaces)
     }
 
     // MARK: - Promotion

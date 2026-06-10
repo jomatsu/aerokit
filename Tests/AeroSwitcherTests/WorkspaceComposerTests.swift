@@ -50,6 +50,19 @@ final class WorkspaceComposerTests: XCTestCase {
         XCTAssertEqual(overview.height, 900)
     }
 
+    func testWriteJPEGRoundTrip() throws {
+        let image = try XCTUnwrap(solidImage(white: 0.5))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aeroswitcher-test-\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertTrue(WorkspaceComposer.writeJPEG(image, to: url))
+
+        let loaded = try XCTUnwrap(WorkspaceComposer.loadImage(at: url))
+        XCTAssertEqual(loaded.width, image.width)
+        XCTAssertEqual(loaded.height, image.height)
+    }
+
     private func solidImage(white: CGFloat, size: Int = 100) -> CGImage? {
         guard let context = CGContext(
             data: nil,
