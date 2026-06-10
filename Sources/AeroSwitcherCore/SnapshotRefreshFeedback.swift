@@ -1,6 +1,6 @@
 public enum SnapshotRefreshFeedback: Equatable {
     case idle
-    case refreshing
+    case refreshing(completed: Int, total: Int)
     case success
     case failure(String)
 
@@ -19,5 +19,12 @@ public enum SnapshotRefreshFeedback: Equatable {
         case let .failure(message):
             message
         }
+    }
+
+    var progress: Double? {
+        guard case let .refreshing(completed, total) = self, total > 0 else {
+            return nil
+        }
+        return Double(completed) / Double(total)
     }
 }

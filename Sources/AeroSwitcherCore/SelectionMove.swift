@@ -4,4 +4,5 @@ public enum SelectionMove {
     case up
     case down
     case next
+    case previous
 }

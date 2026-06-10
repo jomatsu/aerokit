@@ -14,11 +14,16 @@ public final class SwitcherController {
     private let statusBarController: StatusBarController
 
     private var workspaces: [Workspace] = [] {
-        didSet { presentationCache = nil }
+        didSet {
+            if workspaces != oldValue {
+                presentationCache = nil
+            }
+        }
     }
 
     private var presentationCache: [WorkspacePresentation]?
     private var selectedIndex = 0
+    private var hasUserNavigatedSinceShow = false
     private var isSnapshotRefreshRunning = false
     private var snapshotFeedback: SnapshotRefreshFeedback = .idle
     private var snapshotFeedbackClearWorkItem: DispatchWorkItem?
@@ -28,8 +33,15 @@ public final class SwitcherController {
 
         let client = AeroSpaceClient(executablePath: configuration.aerospacePath)
         repository = WorkspaceRepository(client: client, order: configuration.workspaceOrder)
-        snapshotStore = SnapshotStore(rootPath: configuration.snapshotRootPath)
-        snapshotScheduler = SnapshotRefreshScheduler(configuration: configuration, snapshotStore: snapshotStore)
+        snapshotStore = SnapshotStore(
+            rootPath: configuration.snapshotRootPath,
+            maxThumbnailPixelSize: max(configuration.snapshotSize.width, configuration.snapshotSize.height) * 2
+        )
+        snapshotScheduler = SnapshotRefreshScheduler(
+            configuration: configuration,
+            snapshotStore: snapshotStore,
+            engine: SnapshotEngine(configuration: configuration, client: client)
+        )
         iconResolver = AppIconResolver()
         overlay = SwiftUIOverlay(configuration: configuration)
         hotKeyCenter = HotKeyCenter()
@@ -52,6 +64,7 @@ public final class SwitcherController {
         registerLaunchHotKey()
         statusBarController.start()
         settingsModel.refreshStatus()
+        refreshWorkspacesAsync()
     }
 
     public func showSettings() {
@@ -62,6 +75,7 @@ public final class SwitcherController {
     private func registerLaunchHotKey() {
         do {
             try hotKeyCenter.register(.optionBacktick)
+            try hotKeyCenter.register(.optionShiftBacktick)
         } catch {
             logError("Failed to register hotkey: \(error)")
         }
@@ -73,6 +87,11 @@ public final class SwitcherController {
         } catch {
             logError("Failed to register visible hotkey: \(error)")
         }
+        // Carbon hotkeys swallow the key without repeating, so hand Option+`
+        // back to normal dispatch while the overlay is key: held keys then
+        // deliver repeating keyDown events to the panel and keep cycling.
+        hotKeyCenter.unregister(.optionBacktick)
+        hotKeyCenter.unregister(.optionShiftBacktick)
     }
 
     private func logError(_ message: String) {
@@ -101,6 +120,12 @@ public final class SwitcherController {
         overlay.onCancel = { [weak self] in
             self?.hide()
         }
+        overlay.onModifierRelease = { [weak self] in
+            guard let self, hasUserNavigatedSinceShow else {
+                return
+            }
+            selectCurrentWorkspace()
+        }
         settingsModel.onRefreshSnapshots = { [weak self] in
             self?.refreshSnapshotsFromSettings() ?? false
         }
@@ -115,6 +140,19 @@ public final class SwitcherController {
             NSApp.terminate(nil)
         }
 
+        wireSnapshotScheduler()
+    }
+
+    private func wireSnapshotScheduler() {
+        snapshotScheduler.onRefreshStarted = { [weak self] in
+            guard let self else { return }
+            markSnapshotRefreshStarted()
+        }
+        snapshotScheduler.onRefreshProgress = { [weak self] completed, total in
+            guard let self, isSnapshotRefreshRunning else { return }
+            snapshotFeedback = .refreshing(completed: completed, total: total)
+            updateOverlayIfVisible()
+        }
         snapshotScheduler.onRefreshFinished = { [weak self] _ in
             guard let self else { return }
             markSnapshotRefreshFinished()
@@ -136,6 +174,8 @@ public final class SwitcherController {
         switch hotKey {
         case .optionBacktick:
             handleOptionBacktick()
+        case .optionShiftBacktick:
+            handleOptionShiftBacktick()
         case .escape:
             hide()
         }
@@ -150,15 +190,18 @@ public final class SwitcherController {
         show()
     }
 
-    private func show() {
-        do {
-            workspaces = try repository.load()
-            selectedIndex = focusedWorkspaceIndex(in: workspaces) ?? 0
-        } catch {
-            logError("Failed to load workspaces: \(error)")
-            workspaces = []
-            selectedIndex = 0
+    private func handleOptionShiftBacktick() {
+        if overlay.isVisible {
+            moveSelection(.previous)
+            return
         }
+
+        show()
+    }
+
+    private func show() {
+        selectedIndex = focusedWorkspaceIndex(in: workspaces) ?? 0
+        hasUserNavigatedSinceShow = false
 
         overlay.show(
             items: presentationItems(),
@@ -169,14 +212,8 @@ public final class SwitcherController {
         registerVisibleHotKeys()
         refreshWorkspacesAsync()
 
-        let shouldRefreshSnapshots = configuration.snapshotRefreshEnabled
-            && configuration.snapshotRefreshOnShow
-            && snapshotStore.isStale(maxAge: configuration.snapshotStaleInterval)
-
-        if shouldRefreshSnapshots {
-            if snapshotScheduler.refreshOnShowIfNeeded() {
-                markSnapshotRefreshStarted()
-            }
+        if configuration.snapshotRefreshEnabled {
+            snapshotScheduler.refreshOnShowIfNeeded()
         }
     }
 
@@ -190,6 +227,7 @@ public final class SwitcherController {
         guard !workspaces.isEmpty else {
             return
         }
+        hasUserNavigatedSinceShow = true
         selectedIndex = (selectedIndex + 1) % workspaces.count
         updateOverlayIfVisible()
     }
@@ -198,6 +236,8 @@ public final class SwitcherController {
         guard !workspaces.isEmpty else {
             return
         }
+
+        hasUserNavigatedSinceShow = true
 
         switch move {
         case .left:
@@ -210,6 +250,8 @@ public final class SwitcherController {
             selectedIndex = min(workspaces.count - 1, selectedIndex + configuration.columns)
         case .next:
             selectedIndex = (selectedIndex + 1) % workspaces.count
+        case .previous:
+            selectedIndex = (selectedIndex - 1 + workspaces.count) % workspaces.count
         }
 
         updateOverlayIfVisible()
@@ -224,24 +266,43 @@ public final class SwitcherController {
     }
 
     private func selectWorkspace(named name: String) {
-        do {
+        hide()
+
+        performInBackground { [repository] in
             try repository.switchToWorkspace(name)
+        } then: { result in
+            self.finishWorkspaceSwitch(named: name, result: result)
+        }
+    }
+
+    private func finishWorkspaceSwitch(named name: String, result: Result<Void, any Error>) {
+        switch result {
+        case .success:
+            refreshWorkspacesAsync()
             if configuration.snapshotRefreshEnabled {
-                if snapshotScheduler.schedule(reason: .workspaceChange) {
-                    markSnapshotRefreshStarted()
-                }
+                snapshotScheduler.schedule(reason: .workspaceChange)
             }
-        } catch {
+        case let .failure(error):
             logError("Failed to switch workspace \(name): \(error)")
         }
-        hide()
     }
 
     private func refreshWorkspacesAsync() {
-        DispatchQueue.global(qos: .userInitiated).async { [repository] in
-            let result = Result { try repository.load() }
+        performInBackground { [repository] in
+            try repository.load()
+        } then: { result in
+            self.applyWorkspaceRefresh(result)
+        }
+    }
+
+    private func performInBackground<T: Sendable>(
+        _ work: @escaping @Sendable () throws -> T,
+        then handle: @escaping @MainActor (Result<T, any Error>) -> Void
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result(catching: work)
             DispatchQueue.main.async {
-                self.applyWorkspaceRefresh(result)
+                handle(result)
             }
         }
     }
@@ -249,15 +310,24 @@ public final class SwitcherController {
     private func applyWorkspaceRefresh(_ result: Result<[Workspace], any Error>) {
         switch result {
         case let .success(fresh):
+            let selectedName = workspaces.indices.contains(selectedIndex) ? workspaces[selectedIndex].name : nil
             workspaces = fresh
-            if !overlay.isVisible {
+            if !overlay.isVisible || !hasUserNavigatedSinceShow {
                 selectedIndex = focusedWorkspaceIndex(in: fresh) ?? 0
+            } else if let selectedName, let index = fresh.firstIndex(where: { $0.name == selectedName }) {
+                selectedIndex = index
             } else if selectedIndex >= fresh.count {
                 selectedIndex = max(0, fresh.count - 1)
             }
+            prewarmSnapshotCache()
             updateOverlayIfVisible()
         case let .failure(error):
             logError("Failed to refresh workspaces: \(error)")
+            if overlay.isVisible {
+                snapshotFeedback = .failure("Could not load workspaces from AeroSpace")
+                updateOverlayIfVisible()
+                clearSnapshotFeedback(after: 4.0)
+            }
         }
     }
 
@@ -293,7 +363,11 @@ public final class SwitcherController {
     private func focusedWorkspaceIndex(in workspaces: [Workspace]) -> Int? {
         workspaces.firstIndex(where: \.isFocused)
     }
+}
 
+// MARK: - Snapshot refresh
+
+extension SwitcherController {
     private func refreshSnapshotsFromSettings() -> Bool {
         settingsModel.refreshStatus()
 
@@ -307,7 +381,6 @@ public final class SwitcherController {
             return false
         }
 
-        markSnapshotRefreshStarted()
         return true
     }
 
@@ -315,7 +388,7 @@ public final class SwitcherController {
         snapshotFeedbackClearWorkItem?.cancel()
         snapshotFeedbackClearWorkItem = nil
         isSnapshotRefreshRunning = true
-        snapshotFeedback = .refreshing
+        snapshotFeedback = .refreshing(completed: 0, total: 0)
         settingsModel.markSnapshotRefreshStarted()
         updateOverlayIfVisible()
     }
@@ -324,9 +397,22 @@ public final class SwitcherController {
         isSnapshotRefreshRunning = false
         snapshotFeedback = .success
         presentationCache = nil
+        prewarmSnapshotCache()
         settingsModel.markSnapshotRefreshFinished()
         updateOverlayIfVisible()
         clearSnapshotFeedback(after: 2.0)
+    }
+
+    private func prewarmSnapshotCache() {
+        let names = workspaces.map(\.name)
+        DispatchQueue.global(qos: .utility).async { [snapshotStore] in
+            guard let directory = snapshotStore.currentDirectory() else {
+                return
+            }
+            for name in names {
+                _ = snapshotStore.snapshotImage(for: name, in: directory)
+            }
+        }
     }
 
     private func markSnapshotRefreshFailed(_ message: String) {

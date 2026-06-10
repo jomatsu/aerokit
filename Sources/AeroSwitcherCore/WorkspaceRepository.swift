@@ -10,18 +10,17 @@ public final class WorkspaceRepository: @unchecked Sendable {
     }
 
     public func load() throws -> [Workspace] {
-        let names = try client.listWorkspaceNames()
-        let focused = try client.focusedWorkspaceName()
+        let listings = try client.listWorkspaces()
         let windows = try client.listWindows()
         let windowsByWorkspace = Dictionary(grouping: windows, by: \.workspace)
 
-        return names
-            .map { name in
-                let workspaceWindows = windowsByWorkspace[name] ?? []
+        return listings
+            .map { listing in
+                let workspaceWindows = windowsByWorkspace[listing.name] ?? []
                 return Workspace(
-                    name: name,
+                    name: listing.name,
                     apps: uniqueApps(from: workspaceWindows),
-                    isFocused: name == focused,
+                    isFocused: listing.isFocused,
                     isEmpty: workspaceWindows.isEmpty
                 )
             }

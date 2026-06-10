@@ -4,12 +4,14 @@ import Foundation
 @MainActor
 public final class SnapshotRefreshScheduler {
     public var onRequestReceived: ((SnapshotReason) -> Void)?
+    public var onRefreshStarted: (() -> Void)?
+    public var onRefreshProgress: ((Int, Int) -> Void)?
     public var onRefreshFinished: ((URL?) -> Void)?
     public var onRefreshFailed: ((String) -> Void)?
 
     private let configuration: SwitcherConfiguration
     private let snapshotStore: SnapshotStore
-    private let runner: any CommandRunning
+    private let engine: SnapshotEngine
 
     private var debounceTimer: Timer?
     private var requestWatcher: (any DispatchSourceFileSystemObject)?
@@ -23,11 +25,11 @@ public final class SnapshotRefreshScheduler {
     public init(
         configuration: SwitcherConfiguration,
         snapshotStore: SnapshotStore,
-        runner: any CommandRunning = ProcessRunner()
+        engine: SnapshotEngine
     ) {
         self.configuration = configuration
         self.snapshotStore = snapshotStore
-        self.runner = runner
+        self.engine = engine
     }
 
     deinit {
@@ -98,9 +100,6 @@ public final class SnapshotRefreshScheduler {
 
     @discardableResult
     private func schedule(reason: SnapshotReason, force: Bool) -> Bool {
-        guard FileManager.default.isExecutableFile(atPath: configuration.snapshotScriptPath) else {
-            return false
-        }
         guard force || retryAfterFailureAt.timeIntervalSinceNow <= 0 else {
             return false
         }
@@ -135,9 +134,6 @@ public final class SnapshotRefreshScheduler {
         debounceTimer?.invalidate()
         debounceTimer = nil
 
-        guard FileManager.default.isExecutableFile(atPath: configuration.snapshotScriptPath) else {
-            return
-        }
         guard ScreenCapturePermission.isGranted else {
             pendingReason = nil
             retryAfterFailureAt = Date().addingTimeInterval(configuration.snapshotFailureBackoff)
@@ -149,27 +145,20 @@ public final class SnapshotRefreshScheduler {
         pendingReason = nil
         isRunning = true
         lastStartedAt = Date()
+        onRefreshStarted?()
 
-        DispatchQueue.global(qos: .utility).async { [configuration, runner] in
+        Task { @MainActor [engine] in
             let result: Result<URL?, any Error>
             do {
-                let processResult = try runner.run(
-                    configuration.snapshotScriptPath,
-                    arguments: ["--configured", "--current"]
-                )
-                let outputDirectory = processResult.standardOutput
-                    .split(whereSeparator: \.isNewline)
-                    .last
-                    .map(String.init)
-                    .map { URL(fileURLWithPath: $0) }
-                result = .success(outputDirectory)
+                result = try await .success(engine.refresh { completed, total in
+                    Task { @MainActor [weak self] in
+                        self?.onRefreshProgress?(completed, total)
+                    }
+                })
             } catch {
                 result = .failure(error)
             }
-
-            DispatchQueue.main.async {
-                self.finishRefresh(result: result, triggeringReason: reason)
-            }
+            finishRefresh(result: result, triggeringReason: reason)
         }
     }
 

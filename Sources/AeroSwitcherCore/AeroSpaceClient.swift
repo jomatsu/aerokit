@@ -10,16 +10,18 @@ public final class AeroSpaceClient: @unchecked Sendable {
         self.runner = runner
     }
 
-    public func listWorkspaceNames() throws -> [String] {
-        try run(["list-workspaces", "--all"])
-            .split(whereSeparator: \.isNewline)
-            .map(String.init)
-            .filter { !$0.isEmpty }
-    }
+    public func listWorkspaces() throws -> [(name: String, isFocused: Bool)] {
+        let format = ["%{workspace}", "%{workspace-is-focused}"].joined(separator: separator)
 
-    public func focusedWorkspaceName() throws -> String {
-        try run(["list-workspaces", "--focused"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return try run(["list-workspaces", "--all", "--format", format])
+            .split(whereSeparator: \.isNewline)
+            .compactMap { line in
+                let fields = line.split(separator: Character(separator), omittingEmptySubsequences: false)
+                guard fields.count >= 2, !fields[0].isEmpty else {
+                    return nil
+                }
+                return (name: String(fields[0]), isFocused: fields[1] == "true")
+            }
     }
 
     public func listWindows() throws -> [WorkspaceWindow] {
@@ -28,7 +30,10 @@ public final class AeroSpaceClient: @unchecked Sendable {
             "%{app-bundle-id}",
             "%{app-name}",
             "%{workspace}",
-            "%{window-title}"
+            "%{window-title}",
+            "%{window-layout}",
+            "%{window-parent-container-layout}",
+            "%{workspace-root-container-layout}"
         ].joined(separator: separator)
 
         return try run(["list-windows", "--all", "--format", format])
@@ -54,7 +59,10 @@ public final class AeroSpaceClient: @unchecked Sendable {
             bundleIdentifier: fields[1],
             appName: fields[2],
             workspace: fields[3],
-            title: fields[4]
+            title: fields[4],
+            layout: fields.count > 5 ? fields[5] : "",
+            parentContainerLayout: fields.count > 6 ? fields[6] : "",
+            workspaceRootContainerLayout: fields.count > 7 ? fields[7] : ""
         )
     }
 }

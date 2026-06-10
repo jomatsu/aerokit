@@ -54,11 +54,15 @@ public struct ProcessRunner: CommandRunning {
             throw ProcessRunnerError.launchFailed(error.localizedDescription)
         }
 
+        // Drain both pipes while the process runs; waiting first deadlocks once
+        // output exceeds the pipe buffer.
+        let stdoutReader = PipeReader(stdout)
+        let stderrReader = PipeReader(stderr)
         process.waitUntilExit()
 
         let result = ProcessResult(
-            standardOutput: String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
-            standardError: String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+            standardOutput: String(data: stdoutReader.waitForData(), encoding: .utf8) ?? "",
+            standardError: String(data: stderrReader.waitForData(), encoding: .utf8) ?? "",
             terminationStatus: process.terminationStatus
         )
 
@@ -67,6 +71,27 @@ public struct ProcessRunner: CommandRunning {
         }
 
         return result
+    }
+
+    /// @unchecked Sendable: `data` is written once on the background queue;
+    /// group.wait() in waitForData() orders that write before the read.
+    private final class PipeReader: @unchecked Sendable {
+        private var data = Data()
+        private let group = DispatchGroup()
+
+        init(_ pipe: Pipe) {
+            let handle = pipe.fileHandleForReading
+            group.enter()
+            DispatchQueue.global(qos: .utility).async { [self] in
+                data = handle.readDataToEndOfFile()
+                group.leave()
+            }
+        }
+
+        func waitForData() -> Data {
+            group.wait()
+            return data
+        }
     }
 
     private func resolveExecutable(_ executable: String) throws -> URL {

@@ -1,12 +1,17 @@
 import AppKit
 import Foundation
+import ImageIO
 
 public final class SnapshotStore: @unchecked Sendable {
     private let rootURL: URL
     private let fileManager: FileManager
+    private let maxThumbnailPixelSize: CGFloat
+    private var imageCache: [URL: (modifiedAt: Date, image: NSImage)] = [:]
+    private let imageCacheLock = NSLock()
 
-    public init(rootPath: String, fileManager: FileManager = .default) {
+    public init(rootPath: String, maxThumbnailPixelSize: CGFloat = 640, fileManager: FileManager = .default) {
         rootURL = URL(fileURLWithPath: rootPath, isDirectory: true)
+        self.maxThumbnailPixelSize = maxThumbnailPixelSize
         self.fileManager = fileManager
     }
 
@@ -49,8 +54,42 @@ public final class SnapshotStore: @unchecked Sendable {
     }
 
     public func snapshotImage(for workspaceName: String, in directory: URL) -> NSImage? {
-        let fileName = "workspace-\(WorkspaceName.sanitizedFileStem(workspaceName)).png"
-        return NSImage(contentsOf: directory.appendingPathComponent(fileName))
+        let url = directory.appendingPathComponent(WorkspaceName.overviewFileName(workspaceName))
+        guard let modifiedAt = url.contentModificationDate else {
+            return nil
+        }
+
+        if let cached = imageCacheLock.withLock({ imageCache[url] }), cached.modifiedAt == modifiedAt {
+            return cached.image
+        }
+
+        guard let image = downsampledImage(at: url) else {
+            return nil
+        }
+
+        imageCacheLock.withLock {
+            imageCache[url] = (modifiedAt, image)
+        }
+        return image
+    }
+
+    private func downsampledImage(at url: URL) -> NSImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+            return nil
+        }
+
+        let thumbnailOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxThumbnailPixelSize
+        ] as CFDictionary
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
+            return nil
+        }
+
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 
     private func directoryHasCaptures(_ directory: URL) -> Bool {

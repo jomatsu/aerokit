@@ -6,4 +6,12 @@ public enum WorkspaceName {
         let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
         return String(scalars)
     }
+
+    public static func overviewFileName(_ workspace: String) -> String {
+        "workspace-\(sanitizedFileStem(workspace)).png"
+    }
+
+    public static func captureDirectoryName(_ workspace: String) -> String {
+        "workspace-\(sanitizedFileStem(workspace))"
+    }
 }

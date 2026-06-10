@@ -2,7 +2,6 @@ import AppKit
 
 public struct SwitcherConfiguration: Sendable {
     public var aerospacePath: String
-    public var snapshotScriptPath: String
     public var snapshotRootPath: String
     public var snapshotRequestDirectoryPath: String
     public var snapshotRequestFilePath: String
@@ -10,9 +9,10 @@ public struct SwitcherConfiguration: Sendable {
     public var columns: Int
     public var maxAppIcons: Int
     public var snapshotSize: CGSize
-    public var appIconSize: CGFloat
     public var snapshotAppIconSize: CGFloat
     public var padding: CGFloat
+    public var snapshotComposeSize: CGSize
+    public var snapshotComposeGap: CGFloat
     public var snapshotRefreshEnabled: Bool
     public var snapshotRefreshOnShow: Bool
     public var snapshotDebounce: TimeInterval
@@ -25,8 +25,6 @@ public struct SwitcherConfiguration: Sendable {
 
     public init(
         aerospacePath: String = "/opt/homebrew/bin/aerospace",
-        snapshotScriptPath: String =
-            "\(FileManager.default.homeDirectoryForCurrentUser.path)/dotfiles/scripts/aerospace-workspace-snapshot.sh",
         snapshotRootPath: String =
             "\(FileManager.default.homeDirectoryForCurrentUser.path)/Pictures/AeroSpace Workspaces",
         snapshotRequestDirectoryPath: String =
@@ -37,9 +35,10 @@ public struct SwitcherConfiguration: Sendable {
         columns: Int = 4,
         maxAppIcons: Int = 4,
         snapshotSize: CGSize = CGSize(width: 320, height: 180),
-        appIconSize: CGFloat = 64,
         snapshotAppIconSize: CGFloat = 24,
         padding: CGFloat = 20,
+        snapshotComposeSize: CGSize = CGSize(width: 1600, height: 900),
+        snapshotComposeGap: CGFloat = 16,
         snapshotRefreshEnabled: Bool = true,
         snapshotRefreshOnShow: Bool = true,
         snapshotDebounce: TimeInterval = 3.0,
@@ -51,7 +50,6 @@ public struct SwitcherConfiguration: Sendable {
         snapshotFailureBackoff: TimeInterval = 120.0
     ) {
         self.aerospacePath = aerospacePath
-        self.snapshotScriptPath = snapshotScriptPath
         self.snapshotRootPath = snapshotRootPath
         self.snapshotRequestDirectoryPath = snapshotRequestDirectoryPath
         self.snapshotRequestFilePath = snapshotRequestFilePath
@@ -59,9 +57,10 @@ public struct SwitcherConfiguration: Sendable {
         self.columns = columns
         self.maxAppIcons = maxAppIcons
         self.snapshotSize = snapshotSize
-        self.appIconSize = appIconSize
         self.snapshotAppIconSize = snapshotAppIconSize
         self.padding = padding
+        self.snapshotComposeSize = snapshotComposeSize
+        self.snapshotComposeGap = snapshotComposeGap
         self.snapshotRefreshEnabled = snapshotRefreshEnabled
         self.snapshotRefreshOnShow = snapshotRefreshOnShow
         self.snapshotDebounce = snapshotDebounce

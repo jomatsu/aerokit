@@ -104,10 +104,11 @@ public final class HotKeyCenter {
 public enum RegisteredHotKey: UInt32, Sendable {
     case optionBacktick = 1
     case escape = 2
+    case optionShiftBacktick = 3
 
     var keyCode: UInt32 {
         switch self {
-        case .optionBacktick:
+        case .optionBacktick, .optionShiftBacktick:
             UInt32(kVK_ANSI_Grave)
         case .escape:
             UInt32(kVK_Escape)
@@ -118,6 +119,8 @@ public enum RegisteredHotKey: UInt32, Sendable {
         switch self {
         case .optionBacktick:
             UInt32(optionKey)
+        case .optionShiftBacktick:
+            UInt32(optionKey | shiftKey)
         case .escape:
             0
         }

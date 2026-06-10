@@ -15,11 +15,14 @@ public final class SwiftUIOverlay: ObservableObject {
     public var onActivateWorkspace: ((String) -> Void)?
     public var onReloadSnapshots: (() -> Void)?
     public var onCancel: (() -> Void)?
+    public var onModifierRelease: (() -> Void)?
 
     private let configuration: SwitcherConfiguration
     private let panel: OverlayPanel
     private var hostingView: NSHostingView<SwitcherOverlayView>?
     private var keyMonitor: Any?
+    private var flagsMonitor: Any?
+    private var optionHeldSinceShow = false
 
     public var isVisible: Bool {
         panel.isVisible
@@ -47,8 +50,8 @@ public final class SwiftUIOverlay: ObservableObject {
         )
         ensureHostingView()
         positionPanel()
+        optionHeldSinceShow = NSEvent.modifierFlags.contains(.option)
 
-        NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         startDismissMonitors()
@@ -92,11 +95,16 @@ public final class SwiftUIOverlay: ObservableObject {
     }
 
     private func positionPanel() {
-        guard let screen = NSScreen.main else {
+        guard let screen = activeScreen() else {
             return
         }
 
         panel.setFrame(screen.frame, display: true)
+    }
+
+    private func activeScreen() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
@@ -118,9 +126,15 @@ public final class SwiftUIOverlay: ObservableObject {
     }
 
     private func handleNavigationKey(_ event: NSEvent) -> Bool {
+        let isShifted = event.modifierFlags.contains(.shift)
+
         switch event.keyCode {
         case KeyCode.backtick:
-            onAdvance?()
+            if isShifted {
+                onMove?(.previous)
+            } else {
+                onAdvance?()
+            }
         case KeyCode.return, KeyCode.keypadEnter:
             onSelect?()
         case KeyCode.escape:
@@ -134,7 +148,7 @@ public final class SwiftUIOverlay: ObservableObject {
         case KeyCode.upArrow:
             onMove?(.up)
         case KeyCode.tab:
-            onMove?(.next)
+            onMove?(isShifted ? .previous : .next)
         default:
             return false
         }
@@ -142,19 +156,19 @@ public final class SwiftUIOverlay: ObservableObject {
     }
 
     private func quickWorkspace(from event: NSEvent) -> String? {
-        guard let characters = event.charactersIgnoringModifiers?.uppercased() else {
+        guard !event.modifierFlags.contains(.command),
+              let characters = event.charactersIgnoringModifiers?.uppercased()
+        else {
             return nil
         }
         return configuration.workspaceOrder.contains(characters) ? characters : nil
     }
 
+    /// Option is allowed because the switcher is typically held open with
+    /// Option still pressed (releasing it commits the selection).
     private func isSnapshotReloadShortcut(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags.contains(.command),
-              !flags.contains(.option),
-              !flags.contains(.control),
-              !flags.contains(.shift)
-        else {
+        guard flags.contains(.command), !flags.contains(.control) else {
             return false
         }
 
@@ -170,12 +184,27 @@ public final class SwiftUIOverlay: ObservableObject {
             }
             return handleKey(event) ? nil : event
         }
+
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self, panel.isVisible else {
+                return event
+            }
+            if optionHeldSinceShow, !event.modifierFlags.contains(.option) {
+                optionHeldSinceShow = false
+                onModifierRelease?()
+            }
+            return event
+        }
     }
 
     private func stopDismissMonitors() {
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil
+        }
+        if let flagsMonitor {
+            NSEvent.removeMonitor(flagsMonitor)
+            self.flagsMonitor = nil
         }
     }
 }
@@ -198,7 +227,7 @@ private final class OverlayPanel: NSPanel {
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
-            styleMask: [.borderless, .fullSizeContentView],
+            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -250,14 +279,21 @@ public struct SwitcherOverlayView: View {
                 SnapshotRefreshBadge(feedback: model.snapshotFeedback)
                     .frame(height: 26)
 
-                LazyVGrid(columns: gridColumns, spacing: configuration.padding) {
-                    ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                        WorkspaceCard(
-                            item: item,
-                            isSelected: index == model.selectedIndex,
-                            configuration: configuration
-                        ) {
-                            model.activateWorkspace(named: item.workspace.name)
+                if model.items.isEmpty {
+                    Text("No workspaces found. Is AeroSpace running?")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.7))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    LazyVGrid(columns: gridColumns, spacing: configuration.padding) {
+                        ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
+                            WorkspaceCard(
+                                item: item,
+                                isSelected: index == model.selectedIndex,
+                                configuration: configuration
+                            ) {
+                                model.activateWorkspace(named: item.workspace.name)
+                            }
                         }
                     }
                 }
@@ -294,6 +330,8 @@ public struct SwitcherOverlayView: View {
 private struct SnapshotRefreshBadge: View {
     let feedback: SnapshotRefreshFeedback
 
+    private static let accent = Color(red: 0.4, green: 0.6, blue: 1)
+
     var body: some View {
         HStack(spacing: 8) {
             icon
@@ -303,19 +341,29 @@ private struct SnapshotRefreshBadge: View {
                 .truncationMode(.tail)
         }
         .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(foregroundColor)
-        .padding(.horizontal, 12)
-        .frame(maxWidth: 360)
+        .foregroundStyle(Color.white.opacity(0.92))
+        .padding(.horizontal, 14)
         .frame(height: 26)
+        .frame(minWidth: 230)
         .background {
-            Capsule(style: .continuous)
-                .fill(Color.white.opacity(feedback.isVisible ? 0.12 : 0))
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.black.opacity(0.45))
+
+                GeometryReader { proxy in
+                    Rectangle()
+                        .fill(fillGradient)
+                        .frame(width: proxy.size.width * fillFraction)
+                }
+            }
+            .clipShape(Capsule(style: .continuous))
         }
         .overlay {
             Capsule(style: .continuous)
-                .stroke(Color.white.opacity(feedback.isVisible ? 0.12 : 0), lineWidth: 1)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
         }
         .opacity(feedback.isVisible ? 1 : 0)
+        .animation(.easeOut(duration: 0.25), value: feedback)
     }
 
     @ViewBuilder private var icon: some View {
@@ -323,27 +371,43 @@ private struct SnapshotRefreshBadge: View {
         case .idle:
             EmptyView()
         case .refreshing:
-            ProgressView()
-                .controlSize(.small)
-                .scaleEffect(0.65)
+            // The filling background is the indicator once progress is known;
+            // the spinner only covers the brief indeterminate start.
+            if feedback.progress == nil {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.6)
+            }
         case .success:
             Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.green.opacity(0.95))
         case .failure:
             Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Color.red.opacity(0.95))
         }
     }
 
-    private var foregroundColor: Color {
+    private var fillFraction: CGFloat {
         switch feedback {
         case .idle:
-            Color.clear
+            0
         case .refreshing:
-            Color.white.opacity(0.88)
-        case .success:
-            Color.green.opacity(0.9)
-        case .failure:
-            Color.red.opacity(0.9)
+            CGFloat(feedback.progress ?? 0)
+        case .success, .failure:
+            1
         }
+    }
+
+    private var fillGradient: LinearGradient {
+        let colors: [Color] = switch feedback {
+        case .success:
+            [Color.green.opacity(0.40), Color.green.opacity(0.18)]
+        case .failure:
+            [Color.red.opacity(0.45), Color.red.opacity(0.20)]
+        default:
+            [Self.accent.opacity(0.60), Self.accent.opacity(0.28)]
+        }
+        return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
     }
 }
 
@@ -364,6 +428,7 @@ private struct WorkspaceCard: View {
                 .frame(width: configuration.snapshotSize.width, height: 24)
         }
         .frame(width: configuration.snapshotSize.width)
+        .opacity(item.workspace.isEmpty && !isSelected ? 0.45 : 1)
         .contentShape(Rectangle())
         .onTapGesture(perform: onActivate)
     }

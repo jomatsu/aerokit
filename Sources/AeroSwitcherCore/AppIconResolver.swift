@@ -2,7 +2,9 @@ import AppKit
 
 public final class AppIconResolver: @unchecked Sendable {
     private let workspace: NSWorkspace
-    private var cache: [String: NSImage] = [:]
+    /// Misses are cached too: unresolvable apps would otherwise rescan
+    /// runningApplications and probe the filesystem on every rebuild.
+    private var cache: [String: NSImage?] = [:]
 
     public init(workspace: NSWorkspace = .shared) {
         self.workspace = workspace
@@ -18,10 +20,8 @@ public final class AppIconResolver: @unchecked Sendable {
             ?? iconByRunningApplicationName(app.name)
             ?? iconByApplicationPath(app.name)
 
-        if let icon {
-            icon.size = NSSize(width: 64, height: 64)
-            cache[cacheKey] = icon
-        }
+        icon?.size = NSSize(width: 64, height: 64)
+        cache[cacheKey] = icon
         return icon
     }
 
