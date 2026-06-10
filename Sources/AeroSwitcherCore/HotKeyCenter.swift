@@ -3,16 +3,36 @@ import Foundation
 
 @MainActor
 public final class HotKeyCenter {
+    /// Owns the Carbon registrations so they are torn down when the center
+    /// deallocates: the installed handler holds an unretained pointer to the
+    /// center, so it must not outlive it. Lives in its own class because a
+    /// nonisolated deinit cannot touch MainActor state directly.
+    ///
+    /// `@unchecked` because all access happens on the MainActor and deinit
+    /// runs with exclusive access to the last reference.
+    private final class CarbonReferences: @unchecked Sendable {
+        var hotKeys: [HotKeyRole: EventHotKeyRef] = [:]
+        var eventHandler: EventHandlerRef?
+
+        deinit {
+            for reference in hotKeys.values {
+                UnregisterEventHotKey(reference)
+            }
+            if let eventHandler {
+                RemoveEventHandler(eventHandler)
+            }
+        }
+    }
+
     public var onPressed: ((HotKeyRole) -> Void)?
 
-    private var hotKeyReferences: [HotKeyRole: EventHotKeyRef] = [:]
-    private var eventHandlerReference: EventHandlerRef?
+    private let references = CarbonReferences()
     private let signature = OSType(0x4153_5748)
 
     public init() {}
 
     public func register(_ role: HotKeyRole, keyCode: UInt32, modifiers: UInt32) throws {
-        guard hotKeyReferences[role] == nil else {
+        guard references.hotKeys[role] == nil else {
             return
         }
 
@@ -32,28 +52,28 @@ public final class HotKeyCenter {
             throw HotKeyError.registerFailed(status)
         }
 
-        hotKeyReferences[role] = reference
+        references.hotKeys[role] = reference
     }
 
     public func unregister(_ role: HotKeyRole) {
-        guard let reference = hotKeyReferences.removeValue(forKey: role) else {
+        guard let reference = references.hotKeys.removeValue(forKey: role) else {
             return
         }
         UnregisterEventHotKey(reference)
     }
 
     public func unregisterAll() {
-        for role in Array(hotKeyReferences.keys) {
+        for role in Array(references.hotKeys.keys) {
             unregister(role)
         }
-        if let eventHandlerReference {
-            RemoveEventHandler(eventHandlerReference)
-            self.eventHandlerReference = nil
+        if let eventHandler = references.eventHandler {
+            RemoveEventHandler(eventHandler)
+            references.eventHandler = nil
         }
     }
 
     private func installHandlerIfNeeded() throws {
-        guard eventHandlerReference == nil else {
+        guard references.eventHandler == nil else {
             return
         }
 
@@ -93,7 +113,7 @@ public final class HotKeyCenter {
             1,
             &eventSpec,
             Unmanaged.passUnretained(self).toOpaque(),
-            &eventHandlerReference
+            &references.eventHandler
         )
         guard handlerStatus == noErr else {
             throw HotKeyError.installHandlerFailed(handlerStatus)

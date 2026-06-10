@@ -96,8 +96,13 @@ public final class SwitcherController {
                 keyCode: UInt32(spec.keyCode),
                 modifiers: spec.carbonModifiers | UInt32(shiftKey)
             )
+            settingsModel.markHotKeyRegistration(error: nil)
         } catch {
             logError("Failed to register hotkey: \(error)")
+            settingsModel.markHotKeyRegistration(
+                error: "Could not register \(spec.displayKeys.joined()) as the global hotkey. "
+                    + "Another app may already use it — record a different shortcut above."
+            )
         }
     }
 
@@ -243,7 +248,9 @@ extension SwitcherController {
     }
 
     private func showOnboardingIfNeeded() {
-        guard !ScreenCapturePermission.isGranted else {
+        // A failed hotkey registration leaves the app unreachable, so it
+        // warrants the settings window just like a missing permission.
+        guard !ScreenCapturePermission.isGranted || settingsModel.hotKeyErrorMessage != nil else {
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in

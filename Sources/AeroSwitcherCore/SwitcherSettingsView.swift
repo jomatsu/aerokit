@@ -51,6 +51,10 @@ struct SwitcherSettingsView: View {
                 settingsShortcutRow
             }
 
+            if let message = model.hotKeyErrorMessage {
+                errorBanner(message)
+            }
+
             footer
         }
         .padding(.horizontal, 28)

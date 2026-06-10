@@ -14,6 +14,7 @@ public enum ProcessRunnerError: Error, CustomStringConvertible {
     case executableNotFound(String)
     case launchFailed(String)
     case nonZeroExit(executable: String, arguments: [String], result: ProcessResult)
+    case timedOut(executable: String, arguments: [String], timeout: TimeInterval)
 
     public var description: String {
         switch self {
@@ -26,6 +27,8 @@ public enum ProcessRunnerError: Error, CustomStringConvertible {
             \(executable) \(arguments.joined(separator: " ")) \
             exited \(result.terminationStatus): \(result.standardError)
             """
+        case let .timedOut(executable, arguments, timeout):
+            "\(executable) \(arguments.joined(separator: " ")) timed out after \(Int(timeout))s and was killed"
         }
     }
 }
@@ -35,7 +38,11 @@ public protocol CommandRunning: Sendable {
 }
 
 public struct ProcessRunner: CommandRunning {
-    public init() {}
+    private let timeout: TimeInterval
+
+    public init(timeout: TimeInterval = 10) {
+        self.timeout = timeout
+    }
 
     public func run(_ executable: String, arguments: [String]) throws -> ProcessResult {
         let executableURL = try resolveExecutable(executable)
@@ -48,6 +55,9 @@ public struct ProcessRunner: CommandRunning {
         process.standardOutput = stdout
         process.standardError = stderr
 
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+
         do {
             try process.run()
         } catch {
@@ -58,7 +68,14 @@ public struct ProcessRunner: CommandRunning {
         // output exceeds the pipe buffer.
         let stdoutReader = PipeReader(stdout)
         let stderrReader = PipeReader(stderr)
-        process.waitUntilExit()
+
+        guard waitForExit(process, signaledBy: exited) else {
+            throw ProcessRunnerError.timedOut(
+                executable: executableURL.path,
+                arguments: arguments,
+                timeout: timeout
+            )
+        }
 
         let result = ProcessResult(
             standardOutput: String(data: stdoutReader.waitForData(), encoding: .utf8) ?? "",
@@ -71,6 +88,22 @@ public struct ProcessRunner: CommandRunning {
         }
 
         return result
+    }
+
+    /// Returns false when the process outlived `timeout` and had to be
+    /// killed; a hung CLI must not pin a thread (and its pipe readers)
+    /// forever.
+    private func waitForExit(_ process: Process, signaledBy exited: DispatchSemaphore) -> Bool {
+        if exited.wait(timeout: .now() + timeout) == .success {
+            return true
+        }
+
+        process.terminate()
+        if exited.wait(timeout: .now() + 2) == .timedOut {
+            kill(process.processIdentifier, SIGKILL)
+            exited.wait()
+        }
+        return false
     }
 
     /// @unchecked Sendable: `data` is written once on the background queue;
@@ -109,14 +142,16 @@ public struct ProcessRunner: CommandRunning {
         lookup.standardOutput = stdout
         lookup.standardError = Pipe()
 
+        let exited = DispatchSemaphore(value: 0)
+        lookup.terminationHandler = { _ in exited.signal() }
+
         do {
             try lookup.run()
         } catch {
             throw ProcessRunnerError.launchFailed(error.localizedDescription)
         }
 
-        lookup.waitUntilExit()
-        guard lookup.terminationStatus == 0 else {
+        guard waitForExit(lookup, signaledBy: exited), lookup.terminationStatus == 0 else {
             throw ProcessRunnerError.executableNotFound(executable)
         }
 

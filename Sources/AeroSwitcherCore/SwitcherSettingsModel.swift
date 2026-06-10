@@ -9,6 +9,7 @@ final class SwitcherSettingsModel: ObservableObject {
     @Published private(set) var isRefreshingSnapshots = false
     @Published private(set) var refreshProgress: (completed: Int, total: Int)?
     @Published private(set) var lastErrorMessage: String?
+    @Published private(set) var hotKeyErrorMessage: String?
 
     @Published var launchAtLogin: Bool {
         didSet {
@@ -83,6 +84,10 @@ final class SwitcherSettingsModel: ObservableObject {
 
     func setHotKeyRecording(_ isRecording: Bool) {
         onHotKeyRecordingChanged?(isRecording)
+    }
+
+    func markHotKeyRegistration(error message: String?) {
+        hotKeyErrorMessage = message
     }
 
     func refreshSnapshots() {
