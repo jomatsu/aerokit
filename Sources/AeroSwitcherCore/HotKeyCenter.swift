@@ -3,26 +3,26 @@ import Foundation
 
 @MainActor
 public final class HotKeyCenter {
-    public var onPressed: ((RegisteredHotKey) -> Void)?
+    public var onPressed: ((HotKeyRole) -> Void)?
 
-    private var hotKeyReferences: [RegisteredHotKey: EventHotKeyRef] = [:]
+    private var hotKeyReferences: [HotKeyRole: EventHotKeyRef] = [:]
     private var eventHandlerReference: EventHandlerRef?
     private let signature = OSType(0x4153_5748)
 
     public init() {}
 
-    public func register(_ hotKey: RegisteredHotKey) throws {
-        guard hotKeyReferences[hotKey] == nil else {
+    public func register(_ role: HotKeyRole, keyCode: UInt32, modifiers: UInt32) throws {
+        guard hotKeyReferences[role] == nil else {
             return
         }
 
         try installHandlerIfNeeded()
 
         var reference: EventHotKeyRef?
-        let identifier = EventHotKeyID(signature: signature, id: hotKey.rawValue)
+        let identifier = EventHotKeyID(signature: signature, id: role.rawValue)
         let status = RegisterEventHotKey(
-            hotKey.keyCode,
-            hotKey.modifiers,
+            keyCode,
+            modifiers,
             identifier,
             GetApplicationEventTarget(),
             0,
@@ -32,19 +32,19 @@ public final class HotKeyCenter {
             throw HotKeyError.registerFailed(status)
         }
 
-        hotKeyReferences[hotKey] = reference
+        hotKeyReferences[role] = reference
     }
 
-    public func unregister(_ hotKey: RegisteredHotKey) {
-        guard let reference = hotKeyReferences.removeValue(forKey: hotKey) else {
+    public func unregister(_ role: HotKeyRole) {
+        guard let reference = hotKeyReferences.removeValue(forKey: role) else {
             return
         }
         UnregisterEventHotKey(reference)
     }
 
     public func unregisterAll() {
-        for hotKey in Array(hotKeyReferences.keys) {
-            unregister(hotKey)
+        for role in Array(hotKeyReferences.keys) {
+            unregister(role)
         }
         if let eventHandlerReference {
             RemoveEventHandler(eventHandlerReference)
@@ -81,12 +81,12 @@ public final class HotKeyCenter {
                     &identifier
                 )
 
-                guard status == noErr, let hotKey = RegisteredHotKey(rawValue: identifier.id) else {
+                guard status == noErr, let role = HotKeyRole(rawValue: identifier.id) else {
                     return noErr
                 }
 
                 Task { @MainActor in
-                    center.onPressed?(hotKey)
+                    center.onPressed?(role)
                 }
                 return noErr
             },
@@ -101,30 +101,10 @@ public final class HotKeyCenter {
     }
 }
 
-public enum RegisteredHotKey: UInt32, Sendable {
-    case optionBacktick = 1
+public enum HotKeyRole: UInt32, Sendable {
+    case cycleForward = 1
     case escape = 2
-    case optionShiftBacktick = 3
-
-    var keyCode: UInt32 {
-        switch self {
-        case .optionBacktick, .optionShiftBacktick:
-            UInt32(kVK_ANSI_Grave)
-        case .escape:
-            UInt32(kVK_Escape)
-        }
-    }
-
-    var modifiers: UInt32 {
-        switch self {
-        case .optionBacktick:
-            UInt32(optionKey)
-        case .optionShiftBacktick:
-            UInt32(optionKey | shiftKey)
-        case .escape:
-            0
-        }
-    }
+    case cycleBackward = 3
 }
 
 public enum HotKeyError: Error, CustomStringConvertible {

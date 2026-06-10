@@ -10,6 +10,7 @@ public final class SnapshotRefreshScheduler {
     public var onRefreshFailed: ((String) -> Void)?
 
     private let configuration: SwitcherConfiguration
+    private let preferences: AppPreferences
     private let snapshotStore: SnapshotStore
     private let engine: SnapshotEngine
 
@@ -24,10 +25,12 @@ public final class SnapshotRefreshScheduler {
 
     public init(
         configuration: SwitcherConfiguration,
+        preferences: AppPreferences,
         snapshotStore: SnapshotStore,
         engine: SnapshotEngine
     ) {
         self.configuration = configuration
+        self.preferences = preferences
         self.snapshotStore = snapshotStore
         self.engine = engine
     }
@@ -78,10 +81,10 @@ public final class SnapshotRefreshScheduler {
 
     @discardableResult
     public func refreshOnShowIfNeeded() -> Bool {
-        guard configuration.snapshotRefreshOnShow else {
+        guard preferences.autoRefresh else {
             return false
         }
-        guard snapshotStore.isStale(maxAge: configuration.snapshotStaleInterval) else {
+        guard snapshotStore.isStale(maxAge: preferences.refreshFrequency.staleInterval) else {
             return false
         }
         return schedule(reason: .chooserShow)
@@ -100,6 +103,9 @@ public final class SnapshotRefreshScheduler {
 
     @discardableResult
     private func schedule(reason: SnapshotReason, force: Bool) -> Bool {
+        guard force || preferences.autoRefresh else {
+            return false
+        }
         guard force || retryAfterFailureAt.timeIntervalSinceNow <= 0 else {
             return false
         }
@@ -117,7 +123,7 @@ public final class SnapshotRefreshScheduler {
             delay = 0
         } else {
             let settleDelay = settleInterval(for: reason)
-            let nextAllowed = lastStartedAt.addingTimeInterval(configuration.snapshotMinInterval)
+            let nextAllowed = lastStartedAt.addingTimeInterval(preferences.refreshFrequency.minInterval)
             let minIntervalDelay = max(0, nextAllowed.timeIntervalSinceNow)
             delay = max(settleDelay, minIntervalDelay)
         }

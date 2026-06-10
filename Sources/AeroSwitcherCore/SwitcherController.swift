@@ -1,8 +1,11 @@
 import AppKit
+import Carbon
+import Combine
 
 @MainActor
 public final class SwitcherController {
     private let configuration: SwitcherConfiguration
+    private let preferences: AppPreferences
     private let repository: WorkspaceRepository
     private let snapshotStore: SnapshotStore
     private let snapshotScheduler: SnapshotRefreshScheduler
@@ -21,15 +24,15 @@ public final class SwitcherController {
         }
     }
 
+    private let feedbackCoordinator: SnapshotFeedbackCoordinator
     private var presentationCache: [WorkspacePresentation]?
     private var selectedIndex = 0
     private var hasUserNavigatedSinceShow = false
-    private var isSnapshotRefreshRunning = false
-    private var snapshotFeedback: SnapshotRefreshFeedback = .idle
-    private var snapshotFeedbackClearWorkItem: DispatchWorkItem?
+    private var cancellables: Set<AnyCancellable> = []
 
     public init(configuration: SwitcherConfiguration = SwitcherConfiguration()) {
         self.configuration = configuration
+        preferences = AppPreferences()
 
         let client = AeroSpaceClient(executablePath: configuration.aerospacePath)
         repository = WorkspaceRepository(client: client, order: configuration.workspaceOrder)
@@ -39,15 +42,21 @@ public final class SwitcherController {
         )
         snapshotScheduler = SnapshotRefreshScheduler(
             configuration: configuration,
+            preferences: preferences,
             snapshotStore: snapshotStore,
             engine: SnapshotEngine(configuration: configuration, client: client)
         )
         iconResolver = AppIconResolver()
-        overlay = SwiftUIOverlay(configuration: configuration)
+        overlay = SwiftUIOverlay(configuration: configuration, preferences: preferences)
         hotKeyCenter = HotKeyCenter()
-        settingsModel = SwitcherSettingsModel(configuration: configuration, snapshotStore: snapshotStore)
+        settingsModel = SwitcherSettingsModel(
+            configuration: configuration,
+            preferences: preferences,
+            snapshotStore: snapshotStore
+        )
         settingsWindowController = SettingsWindowController(model: settingsModel)
         statusBarController = StatusBarController()
+        feedbackCoordinator = SnapshotFeedbackCoordinator(settingsModel: settingsModel)
 
         wireActions()
     }
@@ -65,6 +74,8 @@ public final class SwitcherController {
         statusBarController.start()
         settingsModel.refreshStatus()
         refreshWorkspacesAsync()
+        observePreferences()
+        showOnboardingIfNeeded()
     }
 
     public func showSettings() {
@@ -73,9 +84,18 @@ public final class SwitcherController {
     }
 
     private func registerLaunchHotKey() {
+        let spec = preferences.hotKey
         do {
-            try hotKeyCenter.register(.optionBacktick)
-            try hotKeyCenter.register(.optionShiftBacktick)
+            try hotKeyCenter.register(
+                .cycleForward,
+                keyCode: UInt32(spec.keyCode),
+                modifiers: spec.carbonModifiers
+            )
+            try hotKeyCenter.register(
+                .cycleBackward,
+                keyCode: UInt32(spec.keyCode),
+                modifiers: spec.carbonModifiers | UInt32(shiftKey)
+            )
         } catch {
             logError("Failed to register hotkey: \(error)")
         }
@@ -83,21 +103,29 @@ public final class SwitcherController {
 
     private func registerVisibleHotKeys() {
         do {
-            try hotKeyCenter.register(.escape)
+            try hotKeyCenter.register(.escape, keyCode: UInt32(kVK_Escape), modifiers: 0)
         } catch {
             logError("Failed to register visible hotkey: \(error)")
         }
-        // Carbon hotkeys swallow the key without repeating, so hand Option+`
-        // back to normal dispatch while the overlay is key: held keys then
-        // deliver repeating keyDown events to the panel and keep cycling.
-        hotKeyCenter.unregister(.optionBacktick)
-        hotKeyCenter.unregister(.optionShiftBacktick)
+        // Carbon hotkeys swallow the key without repeating, so hand the
+        // trigger back to normal dispatch while the overlay is key: held keys
+        // then deliver repeating keyDown events to the panel and keep cycling.
+        unregisterLaunchHotKeys()
+    }
+
+    private func unregisterLaunchHotKeys() {
+        hotKeyCenter.unregister(.cycleForward)
+        hotKeyCenter.unregister(.cycleBackward)
     }
 
     private func logError(_ message: String) {
         fputs("\(message)\n", stderr)
     }
+}
 
+// MARK: - Wiring
+
+extension SwitcherController {
     private func wireActions() {
         overlay.onAdvance = { [weak self] in
             self?.advanceSelection()
@@ -117,6 +145,10 @@ public final class SwitcherController {
         overlay.onReloadSnapshots = { [weak self] in
             _ = self?.refreshSnapshotsFromSettings()
         }
+        overlay.onOpenSettings = { [weak self] in
+            self?.hide()
+            self?.showSettings()
+        }
         overlay.onCancel = { [weak self] in
             self?.hide()
         }
@@ -126,8 +158,31 @@ public final class SwitcherController {
             }
             selectCurrentWorkspace()
         }
+        overlay.onHoverSelect = { [weak self] index in
+            guard let self, workspaces.indices.contains(index), selectedIndex != index else {
+                return
+            }
+            selectedIndex = index
+            hasUserNavigatedSinceShow = true
+            updateOverlayIfVisible()
+        }
+        wireSettingsAndStatusBar()
+        wireSnapshotScheduler()
+    }
+
+    private func wireSettingsAndStatusBar() {
         settingsModel.onRefreshSnapshots = { [weak self] in
             self?.refreshSnapshotsFromSettings() ?? false
+        }
+        settingsModel.onHotKeyRecordingChanged = { [weak self] isRecording in
+            guard let self else { return }
+            // Suspend the global trigger while recording so the chosen
+            // combination reaches the recorder instead of opening the switcher.
+            if isRecording {
+                unregisterLaunchHotKeys()
+            } else if !overlay.isVisible {
+                registerLaunchHotKey()
+            }
         }
         statusBarController.onOpenSettings = { [weak self] in
             self?.showSettings()
@@ -139,28 +194,21 @@ public final class SwitcherController {
         statusBarController.onQuit = {
             NSApp.terminate(nil)
         }
-
-        wireSnapshotScheduler()
     }
 
     private func wireSnapshotScheduler() {
         snapshotScheduler.onRefreshStarted = { [weak self] in
-            guard let self else { return }
-            markSnapshotRefreshStarted()
+            self?.feedbackCoordinator.markStarted()
         }
         snapshotScheduler.onRefreshProgress = { [weak self] completed, total in
-            guard let self, isSnapshotRefreshRunning else { return }
-            snapshotFeedback = .refreshing(completed: completed, total: total)
-            updateOverlayIfVisible()
+            self?.feedbackCoordinator.markProgress(completed: completed, total: total)
         }
         snapshotScheduler.onRefreshFinished = { [weak self] _ in
-            guard let self else { return }
-            markSnapshotRefreshFinished()
+            self?.feedbackCoordinator.markFinished()
         }
         snapshotScheduler.onRefreshFailed = { [weak self] message in
-            guard let self else { return }
-            markSnapshotRefreshFailed(message)
-            logError("Snapshot refresh failed: \(message)")
+            self?.feedbackCoordinator.markFailed(message)
+            self?.logError("Snapshot refresh failed: \(message)")
         }
         snapshotScheduler.onRequestReceived = { [weak self] reason in
             guard reason == .workspaceChange else {
@@ -168,48 +216,81 @@ public final class SwitcherController {
             }
             self?.hide()
         }
+
+        feedbackCoordinator.onChange = { [weak self] in
+            self?.updateOverlayIfVisible()
+        }
+        feedbackCoordinator.onRefreshCompleted = { [weak self] in
+            self?.presentationCache = nil
+            self?.prewarmSnapshotCache()
+        }
     }
 
-    private func handleHotKey(_ hotKey: RegisteredHotKey) {
-        switch hotKey {
-        case .optionBacktick:
-            handleOptionBacktick()
-        case .optionShiftBacktick:
-            handleOptionShiftBacktick()
+    private func observePreferences() {
+        preferences.$hotKey.dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                unregisterLaunchHotKeys()
+                if !overlay.isVisible {
+                    registerLaunchHotKey()
+                }
+            }
+            .store(in: &cancellables)
+
+        preferences.$hideEmptyWorkspaces.dropFirst()
+            .sink { [weak self] _ in self?.refreshWorkspacesAsync() }
+            .store(in: &cancellables)
+    }
+
+    private func showOnboardingIfNeeded() {
+        guard !ScreenCapturePermission.isGranted else {
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.showSettings()
+        }
+    }
+}
+
+// MARK: - Selection & workspaces
+
+extension SwitcherController {
+    private func handleHotKey(_ role: HotKeyRole) {
+        switch role {
+        case .cycleForward:
+            if overlay.isVisible {
+                advanceSelection()
+            } else {
+                show(initialMove: .next)
+            }
+        case .cycleBackward:
+            if overlay.isVisible {
+                moveSelection(.previous)
+            } else {
+                show(initialMove: .previous)
+            }
         case .escape:
             hide()
         }
     }
 
-    private func handleOptionBacktick() {
-        if overlay.isVisible {
-            advanceSelection()
-            return
-        }
-
-        show()
-    }
-
-    private func handleOptionShiftBacktick() {
-        if overlay.isVisible {
-            moveSelection(.previous)
-            return
-        }
-
-        show()
-    }
-
-    private func show() {
+    private func show(initialMove: SelectionMove) {
         selectedIndex = focusedWorkspaceIndex(in: workspaces) ?? 0
         hasUserNavigatedSinceShow = false
 
         overlay.show(
             items: presentationItems(),
             selectedIndex: selectedIndex,
-            isLoading: isSnapshotRefreshRunning,
-            snapshotFeedback: snapshotFeedback
+            snapshotFeedback: feedbackCoordinator.feedback
         )
         registerVisibleHotKeys()
+
+        // cmd-tab style: pre-select the adjacent workspace so a quick tap of
+        // the hotkey commits it as soon as the modifier is released.
+        if preferences.switchOnRelease {
+            moveSelection(initialMove)
+        }
+
         refreshWorkspacesAsync()
 
         if configuration.snapshotRefreshEnabled {
@@ -245,9 +326,9 @@ public final class SwitcherController {
         case .right:
             selectedIndex = min(workspaces.count - 1, selectedIndex + 1)
         case .up:
-            selectedIndex = max(0, selectedIndex - configuration.columns)
+            selectedIndex = max(0, selectedIndex - preferences.gridColumns)
         case .down:
-            selectedIndex = min(workspaces.count - 1, selectedIndex + configuration.columns)
+            selectedIndex = min(workspaces.count - 1, selectedIndex + preferences.gridColumns)
         case .next:
             selectedIndex = (selectedIndex + 1) % workspaces.count
         case .previous:
@@ -309,7 +390,10 @@ public final class SwitcherController {
 
     private func applyWorkspaceRefresh(_ result: Result<[Workspace], any Error>) {
         switch result {
-        case let .success(fresh):
+        case var .success(fresh):
+            if preferences.hideEmptyWorkspaces {
+                fresh = fresh.filter { !$0.isEmpty || $0.isFocused }
+            }
             let selectedName = workspaces.indices.contains(selectedIndex) ? workspaces[selectedIndex].name : nil
             workspaces = fresh
             if !overlay.isVisible || !hasUserNavigatedSinceShow {
@@ -324,9 +408,7 @@ public final class SwitcherController {
         case let .failure(error):
             logError("Failed to refresh workspaces: \(error)")
             if overlay.isVisible {
-                snapshotFeedback = .failure("Could not load workspaces from AeroSpace")
-                updateOverlayIfVisible()
-                clearSnapshotFeedback(after: 4.0)
+                feedbackCoordinator.showTransientFailure("Could not load workspaces from AeroSpace")
             }
         }
     }
@@ -338,8 +420,7 @@ public final class SwitcherController {
         overlay.update(
             items: presentationItems(),
             selectedIndex: selectedIndex,
-            isLoading: isSnapshotRefreshRunning,
-            snapshotFeedback: snapshotFeedback
+            snapshotFeedback: feedbackCoordinator.feedback
         )
     }
 
@@ -372,35 +453,16 @@ extension SwitcherController {
         settingsModel.refreshStatus()
 
         guard ScreenCapturePermission.isGranted else {
-            markSnapshotRefreshFailed("Grant Screen Recording permission before refreshing snapshots.")
+            feedbackCoordinator.markFailed("Grant Screen Recording permission before refreshing snapshots.")
             return false
         }
 
         guard snapshotScheduler.refreshNow() else {
-            markSnapshotRefreshFailed("Snapshot refresh could not be started.")
+            feedbackCoordinator.markFailed("Snapshot refresh could not be started.")
             return false
         }
 
         return true
-    }
-
-    private func markSnapshotRefreshStarted() {
-        snapshotFeedbackClearWorkItem?.cancel()
-        snapshotFeedbackClearWorkItem = nil
-        isSnapshotRefreshRunning = true
-        snapshotFeedback = .refreshing(completed: 0, total: 0)
-        settingsModel.markSnapshotRefreshStarted()
-        updateOverlayIfVisible()
-    }
-
-    private func markSnapshotRefreshFinished() {
-        isSnapshotRefreshRunning = false
-        snapshotFeedback = .success
-        presentationCache = nil
-        prewarmSnapshotCache()
-        settingsModel.markSnapshotRefreshFinished()
-        updateOverlayIfVisible()
-        clearSnapshotFeedback(after: 2.0)
     }
 
     private func prewarmSnapshotCache() {
@@ -413,28 +475,5 @@ extension SwitcherController {
                 _ = snapshotStore.snapshotImage(for: name, in: directory)
             }
         }
-    }
-
-    private func markSnapshotRefreshFailed(_ message: String) {
-        isSnapshotRefreshRunning = false
-        snapshotFeedback = .failure(message)
-        settingsModel.markSnapshotRefreshFailed(message)
-        updateOverlayIfVisible()
-        clearSnapshotFeedback(after: 4.0)
-    }
-
-    private func clearSnapshotFeedback(after delay: TimeInterval) {
-        snapshotFeedbackClearWorkItem?.cancel()
-
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self, !isSnapshotRefreshRunning else {
-                return
-            }
-            snapshotFeedback = .idle
-            updateOverlayIfVisible()
-        }
-
-        snapshotFeedbackClearWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 }

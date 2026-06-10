@@ -5,58 +5,66 @@ import Foundation
 @MainActor
 final class SwitcherSettingsModel: ObservableObject {
     @Published private(set) var screenCaptureGranted = false
-    @Published private(set) var snapshotDirectoryPath = "No snapshot directory found"
-    @Published private(set) var snapshotModifiedText = "Unknown"
+    @Published private(set) var snapshotModifiedAt: Date?
     @Published private(set) var isRefreshingSnapshots = false
-    @Published private(set) var statusMessage = "Ready"
+    @Published private(set) var refreshProgress: (completed: Int, total: Int)?
+    @Published private(set) var lastErrorMessage: String?
+
+    @Published var launchAtLogin: Bool {
+        didSet {
+            // Comparing against the actual agent state both prevents redundant
+            // launchctl calls and makes status-sync assignments no-ops.
+            guard launchAtLogin != LaunchAtLogin.isEnabled else {
+                return
+            }
+            LaunchAtLogin.setEnabled(launchAtLogin)
+        }
+    }
+
+    let preferences: AppPreferences
+    let launchAtLoginAvailable = LaunchAtLogin.isAvailable
 
     var onRefreshSnapshots: (() -> Bool)?
+    var onHotKeyRecordingChanged: ((Bool) -> Void)?
+
+    /// Screen Recording grants only take effect after a relaunch, so remember
+    /// the state the process started with to know when a relaunch is pending.
+    private let grantedAtLaunch: Bool
 
     private let configuration: SwitcherConfiguration
     private let snapshotStore: SnapshotStore
-    private let dateFormatter: DateFormatter
 
-    init(configuration: SwitcherConfiguration, snapshotStore: SnapshotStore) {
+    var needsRelaunch: Bool {
+        screenCaptureGranted && !grantedAtLaunch
+    }
+
+    init(
+        configuration: SwitcherConfiguration,
+        preferences: AppPreferences,
+        snapshotStore: SnapshotStore
+    ) {
         self.configuration = configuration
+        self.preferences = preferences
         self.snapshotStore = snapshotStore
-        dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .medium
+        grantedAtLaunch = ScreenCapturePermission.isGranted
+        launchAtLogin = LaunchAtLogin.isEnabled
     }
 
     func refreshStatus() {
         screenCaptureGranted = ScreenCapturePermission.isGranted
+        launchAtLogin = LaunchAtLogin.isEnabled
 
         guard let directory = snapshotStore.currentDirectory() else {
-            snapshotDirectoryPath = configuration.snapshotRootPath
-            snapshotModifiedText = "No valid snapshot yet"
+            snapshotModifiedAt = nil
             return
         }
 
-        snapshotDirectoryPath = directory.path
         let manifest = directory.appendingPathComponent("manifest.tsv")
-        if let modifiedAt = manifest.contentModificationDate ?? directory.contentModificationDate {
-            snapshotModifiedText = dateFormatter.string(from: modifiedAt)
-        } else {
-            snapshotModifiedText = "Unknown"
-        }
-    }
-
-    func openScreenRecordingSettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-        guard let url else {
-            return
-        }
-        statusMessage = "Grant Screen Recording for AeroSwitcher.app in System Settings"
-        NSWorkspace.shared.open(url)
+        snapshotModifiedAt = manifest.contentModificationDate ?? directory.contentModificationDate
     }
 
     func requestScreenCapturePermission() {
-        if ScreenCapturePermission.request() {
-            statusMessage = "Screen Recording permission granted"
-        } else {
-            statusMessage = "Use the macOS prompt to open Screen Recording settings"
-        }
+        _ = ScreenCapturePermission.request()
         refreshStatus()
     }
 
@@ -73,6 +81,10 @@ final class SwitcherSettingsModel: ObservableObject {
         ApplicationRelauncher.relaunch()
     }
 
+    func setHotKeyRecording(_ isRecording: Bool) {
+        onHotKeyRecordingChanged?(isRecording)
+    }
+
     func refreshSnapshots() {
         guard onRefreshSnapshots?() == true else {
             refreshStatus()
@@ -82,18 +94,28 @@ final class SwitcherSettingsModel: ObservableObject {
 
     func markSnapshotRefreshStarted() {
         isRefreshingSnapshots = true
-        statusMessage = "Refreshing snapshots..."
+        refreshProgress = nil
+        lastErrorMessage = nil
+    }
+
+    func markSnapshotRefreshProgress(completed: Int, total: Int) {
+        guard isRefreshingSnapshots, total > 0 else {
+            return
+        }
+        refreshProgress = (completed: completed, total: total)
     }
 
     func markSnapshotRefreshFinished() {
         isRefreshingSnapshots = false
-        statusMessage = "Snapshots refreshed"
+        refreshProgress = nil
+        lastErrorMessage = nil
         refreshStatus()
     }
 
     func markSnapshotRefreshFailed(_ message: String) {
         isRefreshingSnapshots = false
-        statusMessage = message
+        refreshProgress = nil
+        lastErrorMessage = message
         refreshStatus()
     }
 }

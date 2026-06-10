@@ -27,14 +27,18 @@ final class SettingsWindowController {
             let view = SwitcherSettingsView(model: model)
             let hostingView = NSHostingView(rootView: view)
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
-                styleMask: [.titled, .closable, .miniaturizable],
+                contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
+                styleMask: [.titled, .closable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
-            window.title = "AeroSwitcher Settings"
+            window.title = "AeroSwitcher"
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
             window.contentView = hostingView
             window.isReleasedWhenClosed = false
+            window.setContentSize(hostingView.fittingSize)
             window.center()
             self.window = window
         }

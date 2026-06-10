@@ -14,17 +14,14 @@ public struct SwitcherConfiguration: Sendable {
     public var snapshotComposeSize: CGSize
     public var snapshotComposeGap: CGFloat
     public var snapshotRefreshEnabled: Bool
-    public var snapshotRefreshOnShow: Bool
     public var snapshotDebounce: TimeInterval
     public var snapshotWindowSettle: TimeInterval
     public var snapshotWorkspaceSettle: TimeInterval
     public var snapshotChooserSettle: TimeInterval
-    public var snapshotMinInterval: TimeInterval
-    public var snapshotStaleInterval: TimeInterval
     public var snapshotFailureBackoff: TimeInterval
 
     public init(
-        aerospacePath: String = "/opt/homebrew/bin/aerospace",
+        aerospacePath: String = AeroSpaceClient.detectExecutablePath(),
         snapshotRootPath: String =
             "\(FileManager.default.homeDirectoryForCurrentUser.path)/Pictures/AeroSpace Workspaces",
         snapshotRequestDirectoryPath: String =
@@ -40,13 +37,10 @@ public struct SwitcherConfiguration: Sendable {
         snapshotComposeSize: CGSize = CGSize(width: 1600, height: 900),
         snapshotComposeGap: CGFloat = 16,
         snapshotRefreshEnabled: Bool = true,
-        snapshotRefreshOnShow: Bool = true,
         snapshotDebounce: TimeInterval = 3.0,
         snapshotWindowSettle: TimeInterval = 5.0,
         snapshotWorkspaceSettle: TimeInterval = 3.0,
         snapshotChooserSettle: TimeInterval = 0.50,
-        snapshotMinInterval: TimeInterval = 60.0,
-        snapshotStaleInterval: TimeInterval = 180.0,
         snapshotFailureBackoff: TimeInterval = 120.0
     ) {
         self.aerospacePath = aerospacePath
@@ -62,13 +56,10 @@ public struct SwitcherConfiguration: Sendable {
         self.snapshotComposeSize = snapshotComposeSize
         self.snapshotComposeGap = snapshotComposeGap
         self.snapshotRefreshEnabled = snapshotRefreshEnabled
-        self.snapshotRefreshOnShow = snapshotRefreshOnShow
         self.snapshotDebounce = snapshotDebounce
         self.snapshotWindowSettle = snapshotWindowSettle
         self.snapshotWorkspaceSettle = snapshotWorkspaceSettle
         self.snapshotChooserSettle = snapshotChooserSettle
-        self.snapshotMinInterval = snapshotMinInterval
-        self.snapshotStaleInterval = snapshotStaleInterval
         self.snapshotFailureBackoff = snapshotFailureBackoff
     }
 }

@@ -14,7 +14,15 @@ final class StatusBarController: NSObject {
         }
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "AS"
+        if let image = NSImage(
+            systemSymbolName: "rectangle.3.group",
+            accessibilityDescription: "AeroSwitcher"
+        ) {
+            image.isTemplate = true
+            item.button?.image = image
+        } else {
+            item.button?.title = "AS"
+        }
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(

@@ -10,6 +10,26 @@ public final class AeroSpaceClient: @unchecked Sendable {
         self.runner = runner
     }
 
+    /// Locates the aerospace CLI across common install locations, falling
+    /// back to the Homebrew path GUI apps can't always find via PATH.
+    public static func detectExecutablePath() -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var candidates = [
+            "/opt/homebrew/bin/aerospace",
+            "/usr/local/bin/aerospace",
+            "\(home)/.local/bin/aerospace"
+        ]
+
+        if let path = ProcessInfo.processInfo.environment["PATH"] {
+            candidates += path
+                .split(separator: ":")
+                .map { "\($0)/aerospace" }
+        }
+
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+            ?? "/opt/homebrew/bin/aerospace"
+    }
+
     public func listWorkspaces() throws -> [(name: String, isFocused: Bool)] {
         let format = ["%{workspace}", "%{workspace-is-focused}"].joined(separator: separator)
 
