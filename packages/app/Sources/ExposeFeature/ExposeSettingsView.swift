@@ -9,32 +9,7 @@ struct ExposeSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            SettingsSection("Shortcuts") {
-                SettingsRow(
-                    title: "Show window overview",
-                    subtitle: "Lay out the focused workspace's windows in a grid"
-                ) {
-                    HotKeyRecorder(spec: $preferences.hotKey) { isRecording in
-                        model.setHotKeyRecording(isRecording)
-                    }
-                }
-                SettingsDivider()
-                SettingsRow(
-                    title: "Show app windows",
-                    subtitle: "Lay out the focused app's windows from every workspace"
-                ) {
-                    HotKeyRecorder(spec: $preferences.appHotKey) { isRecording in
-                        model.setHotKeyRecording(isRecording)
-                    }
-                }
-                SettingsDivider()
-                SettingsRow(
-                    title: "\u{2325} + number selects windows",
-                    subtitle: "\u{2325}1\u{2013}9 focuses a window instead of switching AeroSpace workspaces"
-                ) {
-                    SettingsToggle(isOn: $preferences.modifierQuickSelect)
-                }
-            }
+            shortcutsSection
 
             if let message = model.hotKeyErrorMessage {
                 SettingsErrorBanner(message)
@@ -57,7 +32,7 @@ struct ExposeSettingsView: View {
             SettingsSection("Tips") {
                 SettingsRow(
                     title: "While the overview is open",
-                    subtitle: "Click or press 1–9 / A–Z to focus a window · arrows move · Esc dismisses"
+                    subtitle: "1–9 / A–Z focus · arrows move · \(preferences.groupToggleKey) groups · Esc dismisses"
                 ) {
                     EmptyView()
                 }
@@ -69,6 +44,51 @@ struct ExposeSettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // Coming back from System Settings after granting access.
             accessibilityGranted = AccessibilityPermission.isGranted
+        }
+    }
+
+    private var shortcutsSection: some View {
+        SettingsSection("Shortcuts") {
+            SettingsRow(
+                title: "Show window overview",
+                subtitle: "Lay out the focused workspace's windows in a grid"
+            ) {
+                HotKeyRecorder(spec: $preferences.hotKey) { isRecording in
+                    model.setHotKeyRecording(isRecording)
+                }
+            }
+            SettingsDivider()
+            SettingsRow(
+                title: "Show app windows",
+                subtitle: "Lay out the focused app's windows from every workspace"
+            ) {
+                HotKeyRecorder(spec: $preferences.appHotKey) { isRecording in
+                    model.setHotKeyRecording(isRecording)
+                }
+            }
+            SettingsDivider()
+            SettingsRow(
+                title: "\u{2325} + number selects windows",
+                subtitle: "\u{2325}1\u{2013}9 focuses a window instead of switching AeroSpace workspaces"
+            ) {
+                SettingsToggle(isOn: $preferences.modifierQuickSelect)
+            }
+            SettingsDivider()
+            SettingsRow(
+                title: "Group overview by app",
+                subtitle: "Cluster the workspace overview into per-app cards"
+            ) {
+                SettingsToggle(isOn: $preferences.groupByApp)
+            }
+            SettingsDivider()
+            SettingsRow(
+                title: "Grouping toggle key",
+                subtitle: "Flips grouping while the overview is open \u{B7} quick select skips this key"
+            ) {
+                CharacterKeyRecorder(key: $preferences.groupToggleKey) { isRecording in
+                    model.setHotKeyRecording(isRecording)
+                }
+            }
         }
     }
 }

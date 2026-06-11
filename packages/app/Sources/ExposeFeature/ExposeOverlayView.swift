@@ -5,6 +5,8 @@ import SwiftUI
 /// windows laid out in a grid of live previews.
 struct ExposeOverlayView: View {
     let session: ExposeSession
+    /// The grouping-toggle key, skipped by the quick-select labels.
+    let quickSelectExclusion: Character?
     let onActivate: (Int) -> Void
     let onHover: (Int) -> Void
     let onCancel: () -> Void
@@ -38,7 +40,15 @@ struct ExposeOverlayView: View {
             .onTapGesture(perform: onCancel)
     }
 
-    private func grid(in size: CGSize) -> some View {
+    @ViewBuilder private func grid(in size: CGSize) -> some View {
+        if let sections = session.sections, let sectionRows = session.sectionRows {
+            groupedGrid(sections: sections, sectionRows: sectionRows, in: size)
+        } else {
+            flatGrid(in: size)
+        }
+    }
+
+    private func flatGrid(in size: CGSize) -> some View {
         let cell = TileGeometry.cellSize(
             container: size,
             grid: session.grid,
@@ -47,10 +57,36 @@ struct ExposeOverlayView: View {
         )
 
         return VStack(spacing: TileMetrics.gap) {
-            ForEach(rowRanges, id: \.lowerBound) { row in
-                HStack(spacing: TileMetrics.gap) {
-                    ForEach(row, id: \.self) { index in
-                        tileView(at: index, cell: cell)
+            tileRows(in: 0 ..< session.tiles.count, gap: TileMetrics.gap, cell: cell)
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    // MARK: - Grouped (app cards)
+
+    private func groupedGrid(
+        sections: [ExposeSession.Section],
+        sectionRows: [[Int]],
+        in size: CGSize
+    ) -> some View {
+        let cell = TileGeometry.groupedCellSize(
+            container: size,
+            layout: GroupedGridLayout(grid: session.grid, rows: sectionRows),
+            groupCounts: sections.map(\.tileRange.count),
+            chrome: TileGeometry.GroupChrome(
+                margin: TileMetrics.margin,
+                groupGap: TileMetrics.gap,
+                tileGap: TileMetrics.groupTileGap,
+                cardPadding: TileMetrics.groupCardPadding,
+                headerHeight: TileMetrics.sectionHeaderHeight + TileMetrics.sectionHeaderSpacing
+            )
+        )
+
+        return VStack(spacing: TileMetrics.gap) {
+            ForEach(sectionRows, id: \.first) { row in
+                HStack(alignment: .top, spacing: TileMetrics.gap) {
+                    ForEach(row, id: \.self) { sectionIndex in
+                        groupCard(sections[sectionIndex], cell: cell)
                     }
                 }
             }
@@ -58,22 +94,70 @@ struct ExposeOverlayView: View {
         .frame(width: size.width, height: size.height)
     }
 
+    private func groupCard(_ section: ExposeSession.Section, cell: CGSize) -> some View {
+        let shape = RoundedRectangle(cornerRadius: TileMetrics.groupCardCornerRadius, style: .continuous)
+
+        return VStack(alignment: .leading, spacing: TileMetrics.sectionHeaderSpacing) {
+            sectionHeader(section)
+            tileRows(in: section.tileRange, gap: TileMetrics.groupTileGap, cell: cell)
+        }
+        .padding(TileMetrics.groupCardPadding)
+        .background {
+            shape
+                .fill(.white.opacity(0.05))
+                .overlay {
+                    shape.strokeBorder(.white.opacity(0.09), lineWidth: 1)
+                }
+        }
+    }
+
+    private func sectionHeader(_ section: ExposeSession.Section) -> some View {
+        HStack(spacing: 6) {
+            if let icon = section.icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 16, height: 16)
+            }
+            Text(section.appName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(1)
+            if section.tileRange.count > 1 {
+                Text("\(section.tileRange.count)")
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .padding(.horizontal, 5)
+                    .frame(height: 15)
+                    .background(.white.opacity(0.12), in: Capsule())
+            }
+        }
+        .frame(height: TileMetrics.sectionHeaderHeight)
+        .padding(.leading, 2)
+    }
+
+    private func tileRows(in range: Range<Int>, gap: CGFloat, cell: CGSize) -> some View {
+        VStack(spacing: gap) {
+            ForEach(session.rowRanges(in: range), id: \.lowerBound) { row in
+                HStack(spacing: gap) {
+                    ForEach(row, id: \.self) { index in
+                        tileView(at: index, cell: cell)
+                    }
+                }
+            }
+        }
+    }
+
     private func tileView(at index: Int, cell: CGSize) -> some View {
         WindowTile(
             tile: session.tiles[index],
-            shortcut: QuickSelect.label(forIndex: index),
+            shortcut: QuickSelect.label(forIndex: index, excluding: quickSelectExclusion),
             isSelected: index == session.selectedIndex,
             cell: cell,
+            showsLabelIcon: !session.isGroupedByApp,
             onActivate: { onActivate(index) },
             onHover: { onHover(index) }
         )
         .frame(width: cell.width, height: cell.height)
-    }
-
-    private var rowRanges: [Range<Int>] {
-        stride(from: 0, to: session.tiles.count, by: session.grid.columns).map {
-            $0 ..< min($0 + session.grid.columns, session.tiles.count)
-        }
     }
 }
 
@@ -82,6 +166,8 @@ private struct WindowTile: View {
     let shortcut: String?
     let isSelected: Bool
     let cell: CGSize
+    /// Off inside an app card, where the header already shows the icon.
+    let showsLabelIcon: Bool
     let onActivate: () -> Void
     let onHover: () -> Void
 
@@ -165,7 +251,7 @@ private struct WindowTile: View {
 
     private var label: some View {
         HStack(spacing: 6) {
-            if let icon = tile.icon {
+            if showsLabelIcon, let icon = tile.icon {
                 Image(nsImage: icon)
                     .resizable()
                     .frame(width: 16, height: 16)

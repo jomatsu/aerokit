@@ -49,7 +49,9 @@ public final class ExposeController {
         overlay.onActivate = { [weak self] index in self?.activate(index) }
         overlay.onMove = { [weak self] move in self?.session?.move(move) }
         overlay.onHover = { [weak self] index in self?.session?.select(index) }
-        digitInterceptor.onDigit = { [weak self] digit in self?.activate(digit - 1) }
+        overlay.onToggleGrouping = { [weak self] in self?.toggleGrouping() }
+        overlay.groupToggleKey = preferences.groupToggleCharacter
+        digitInterceptor.onDigit = { [weak self] digit in self?.quickSelectDigit(digit) }
 
         settingsModel.onHotKeyRecordingChanged = { [weak self] isRecording in
             // Suspend the global triggers while recording so the chosen
@@ -133,6 +135,9 @@ public final class ExposeController {
         preferences.$appHotKey.dropFirst()
             .sink { [weak self] _ in self?.registerAppHotKey() }
             .store(in: &cancellables)
+        preferences.$groupToggleKey.dropFirst()
+            .sink { [weak self] key in self?.overlay.groupToggleKey = key.first ?? "0" }
+            .store(in: &cancellables)
     }
 
     // MARK: - Presentation
@@ -180,7 +185,8 @@ public final class ExposeController {
             containerAspect: screen.frame.width / max(screen.frame.height, 1),
             bounds: context.bounds,
             focusedWindowID: context.focusedWindowID,
-            icons: icons(for: windows)
+            icons: icons(for: windows),
+            groupByApp: scope == .workspace && preferences.groupByApp
         )
         self.session = session
         overlay.show(session: session, on: screen)
@@ -197,7 +203,7 @@ public final class ExposeController {
         // run it concurrently instead of paying a second CLI round trip
         // before the overlay can show.
         async let focused = client.focusedWindow()
-        guard let snapshot = loadSnapshot("workspace", try client.focusedWorkspaceWindows()) else {
+        guard let snapshot = loadSnapshot("workspace", { try client.focusedWorkspaceWindows() }) else {
             return nil
         }
         return await PresentationContext(
@@ -220,9 +226,9 @@ public final class ExposeController {
             fputs("AeroKit: app exposé: no focused window\n", stderr)
             return nil
         }
-        guard var snapshot = loadSnapshot(
-            "app", try client.appWindows(bundleIdentifier: focused.bundleIdentifier, pid: focused.pid)
-        ) else {
+        guard var snapshot = loadSnapshot("app", {
+            try client.appWindows(bundleIdentifier: focused.bundleIdentifier, pid: focused.pid)
+        }) else {
             return nil
         }
         // The app's windows can span monitors; the overlay belongs on the
@@ -239,7 +245,7 @@ public final class ExposeController {
     /// an overlay.
     private nonisolated static func loadSnapshot(
         _ label: String,
-        _ list: @autoclosure () throws -> WorkspaceSnapshot
+        _ list: () throws -> WorkspaceSnapshot
     ) -> WorkspaceSnapshot? {
         do {
             let snapshot = try list()
@@ -371,6 +377,31 @@ public final class ExposeController {
     }
 
     // MARK: - Selection
+
+    /// `0` while the overview is open. Grouping only applies to the
+    /// workspace scope — the app scope is a single app already — and the
+    /// chosen mode becomes the default for the next presentation.
+    private func toggleGrouping() {
+        guard requestedScope == .workspace, let session else {
+            return
+        }
+        session.toggleGrouping()
+        preferences.groupByApp = session.isGroupedByApp
+    }
+
+    /// ⌥1–9 from the event tap, routed like typed keys so a digit chosen
+    /// as the grouping toggle works there too.
+    private func quickSelectDigit(_ digit: Int) {
+        guard let character = String(digit).first else {
+            return
+        }
+        let toggleKey = preferences.groupToggleCharacter
+        if character == toggleKey {
+            toggleGrouping()
+        } else if let index = QuickSelect.index(for: character, excluding: toggleKey) {
+            activate(index)
+        }
+    }
 
     private func activate(_ index: Int) {
         guard let session, session.tiles.indices.contains(index) else {

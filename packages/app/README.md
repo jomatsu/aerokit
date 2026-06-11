@@ -21,6 +21,12 @@ focuses a window;
 <kbd>Esc</kbd> or the hotkey dismisses. Windows are never moved — the
 overview is a pure overlay, so it can't disturb the layout.
 
+<kbd>0</kbd> (configurable) toggles grouping the overview by app: each
+app's windows cluster into a card with the app's name instead of the
+spatial layout. The last choice sticks and can also be set from the
+settings window. If the chosen toggle key is one of the quick-select keys,
+quick select simply skips it — the two can never collide.
+
 ### App Exposé (default <kbd>⌥A</kbd>)
 
 The same overview scoped to the focused app: its windows from every

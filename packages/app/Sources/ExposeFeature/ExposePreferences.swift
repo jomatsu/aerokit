@@ -33,12 +33,31 @@ public final class ExposePreferences: ObservableObject {
         didSet { defaults.set(modifierQuickSelect, forKey: Keys.modifierQuickSelect) }
     }
 
+    /// Workspace overview opens grouped by app; the toggle key while open
+    /// flips it and the last choice sticks.
+    @Published public var groupByApp: Bool {
+        didSet { defaults.set(groupByApp, forKey: Keys.groupByApp) }
+    }
+
+    /// Key that toggles grouping while the overview is open. Stored as a
+    /// single uppercase character; quick select skips it, so any choice —
+    /// including a digit or letter — stays collision-free.
+    @Published public var groupToggleKey: String {
+        didSet { defaults.set(groupToggleKey, forKey: Keys.groupToggleKey) }
+    }
+
+    public var groupToggleCharacter: Character {
+        groupToggleKey.first ?? "0"
+    }
+
     private let defaults: UserDefaults
 
     private enum Keys {
         static let hotKey = "expose.hotKey"
         static let appHotKey = "expose.appHotKey"
         static let modifierQuickSelect = "expose.modifierQuickSelect"
+        static let groupByApp = "expose.groupByApp"
+        static let groupToggleKey = "expose.groupToggleKey"
     }
 
     public init(defaults: UserDefaults = .standard) {
@@ -46,5 +65,8 @@ public final class ExposePreferences: ObservableObject {
         hotKey = HotKeySpec.load(from: defaults, key: Keys.hotKey) ?? Self.defaultHotKey
         appHotKey = HotKeySpec.load(from: defaults, key: Keys.appHotKey) ?? Self.defaultAppHotKey
         modifierQuickSelect = defaults.object(forKey: Keys.modifierQuickSelect) as? Bool ?? true
+        groupByApp = defaults.bool(forKey: Keys.groupByApp)
+        let storedToggleKey = defaults.string(forKey: Keys.groupToggleKey)?.uppercased().first
+        groupToggleKey = storedToggleKey.map(String.init) ?? "0"
     }
 }

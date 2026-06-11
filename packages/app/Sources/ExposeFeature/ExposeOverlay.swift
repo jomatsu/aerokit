@@ -10,6 +10,10 @@ final class ExposeOverlay {
     var onCancel: (() -> Void)?
     var onMove: ((SelectionMove) -> Void)?
     var onHover: ((Int) -> Void)?
+    var onToggleGrouping: (() -> Void)?
+    /// Key that toggles app grouping; quick select skips it so they can't
+    /// collide.
+    var groupToggleKey: Character = "0"
 
     private let panel: OverlayPanel
     private var session: ExposeSession?
@@ -38,6 +42,7 @@ final class ExposeOverlay {
         self.session = session
         let view = ExposeOverlayView(
             session: session,
+            quickSelectExclusion: groupToggleKey,
             onActivate: { [weak self] index in self?.onActivate?(index) },
             onHover: { [weak self] index in self?.hover(index) },
             onCancel: { [weak self] in self?.onCancel?() }
@@ -88,16 +93,24 @@ final class ExposeOverlay {
         case KeyCode.tab:
             onMove?(event.modifierFlags.contains(.shift) ? .previous : .next)
         default:
-            if let index = quickSelectIndex(from: event) {
-                onActivate?(index)
-            }
+            handleCharacterKey(event)
         }
         return true
     }
 
-    private func quickSelectIndex(from event: NSEvent) -> Int? {
-        guard let character = event.charactersIgnoringModifiers?.first,
-              let index = QuickSelect.index(for: character),
+    private func handleCharacterKey(_ event: NSEvent) {
+        guard let character = event.charactersIgnoringModifiers?.first else {
+            return
+        }
+        if String(character).uppercased() == String(groupToggleKey).uppercased() {
+            onToggleGrouping?()
+        } else if let index = quickSelectIndex(for: character) {
+            onActivate?(index)
+        }
+    }
+
+    private func quickSelectIndex(for character: Character) -> Int? {
+        guard let index = QuickSelect.index(for: character, excluding: groupToggleKey),
               let session,
               session.tiles.indices.contains(index)
         else {
