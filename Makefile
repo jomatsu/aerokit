@@ -1,4 +1,4 @@
-SWIFT_SOURCES := $(shell find Sources Tests -name '*.swift' 2>/dev/null)
+PACKAGES := packages/switcher
 
 .PHONY: bootstrap
 bootstrap:
@@ -18,15 +18,15 @@ lint:
 
 .PHONY: build
 build:
-	swift build
+	@for package in $(PACKAGES); do swift build --package-path "$$package" || exit 1; done
 
 .PHONY: test
 test:
-	swift test
+	@for package in $(PACKAGES); do swift test --package-path "$$package" || exit 1; done
 
 .PHONY: check
 check: lint build test
 
 .PHONY: install
 install:
-	scripts/install-app.sh
+	packages/switcher/scripts/install-app.sh
