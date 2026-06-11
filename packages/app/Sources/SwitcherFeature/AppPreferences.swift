@@ -61,10 +61,16 @@ public final class AppPreferences: ObservableObject {
         didSet { defaults.set(refreshFrequency.rawValue, forKey: Keys.refreshFrequency) }
     }
 
-    /// cmd-tab style: opening the switcher pre-selects the next workspace,
-    /// so a quick tap of the hotkey switches immediately on release.
+    /// cmd-tab style: releasing the trigger modifier commits the selection.
+    /// Off, the overlay stays open until Return/click/quick-select.
     @Published public var switchOnRelease: Bool {
         didSet { defaults.set(switchOnRelease, forKey: Keys.switchOnRelease) }
+    }
+
+    /// Opening the switcher pre-selects the adjacent workspace instead of the
+    /// current one, so a quick tap of the hotkey moves one workspace over.
+    @Published public var preselectNextOnOpen: Bool {
+        didSet { defaults.set(preselectNextOnOpen, forKey: Keys.preselectNextOnOpen) }
     }
 
     @Published public var hideEmptyWorkspaces: Bool {
@@ -97,6 +103,7 @@ public final class AppPreferences: ObservableObject {
         static let autoRefresh = "snapshot.autoRefresh"
         static let refreshFrequency = "snapshot.refreshFrequency"
         static let switchOnRelease = "switcher.switchOnRelease"
+        static let preselectNextOnOpen = "switcher.preselectNextOnOpen"
         static let hideEmptyWorkspaces = "switcher.hideEmptyWorkspaces"
         static let gridColumns = "switcher.gridColumns"
         static let showOverlayHints = "switcher.showOverlayHints"
@@ -111,6 +118,16 @@ public final class AppPreferences: ObservableObject {
         refreshFrequency = defaults.string(forKey: Keys.refreshFrequency)
             .flatMap(SnapshotRefreshFrequency.init) ?? .every3Minutes
         switchOnRelease = defaults.bool(forKey: Keys.switchOnRelease)
+        // Pre-selection used to be implied by switchOnRelease; inherit it for
+        // existing cmd-tab-style users and pin it immediately so the two
+        // settings stay independent from now on.
+        if let stored = defaults.object(forKey: Keys.preselectNextOnOpen) as? Bool {
+            preselectNextOnOpen = stored
+        } else {
+            let inherited = defaults.bool(forKey: Keys.switchOnRelease)
+            preselectNextOnOpen = inherited
+            defaults.set(inherited, forKey: Keys.preselectNextOnOpen)
+        }
         hideEmptyWorkspaces = defaults.bool(forKey: Keys.hideEmptyWorkspaces)
         let storedColumns = defaults.integer(forKey: Keys.gridColumns)
         gridColumns = (2 ... 6).contains(storedColumns) ? storedColumns : 4

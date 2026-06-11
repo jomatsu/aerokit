@@ -30,8 +30,7 @@ public final class SwitcherController {
 
     private let feedbackCoordinator: SnapshotFeedbackCoordinator
     private var presentationCache: [WorkspacePresentation]?
-    private var selectedIndex = 0
-    private var hasUserNavigatedSinceShow = false
+    private var selection = SwitcherSelection()
     private var cancellables: Set<AnyCancellable> = []
 
     public init(
@@ -101,17 +100,9 @@ public final class SwitcherController {
     public func handle(_ role: HotKeyRole) {
         switch role {
         case .cycleForward:
-            if overlay.isVisible {
-                advanceSelection()
-            } else {
-                show(initialMove: .next)
-            }
+            cycle(.next)
         case .cycleBackward:
-            if overlay.isVisible {
-                moveSelection(.previous)
-            } else {
-                show(initialMove: .previous)
-            }
+            cycle(.previous)
         case .escape:
             hide()
         case .exposeToggle, .exposeAppToggle:
@@ -165,9 +156,6 @@ public final class SwitcherController {
 
 extension SwitcherController {
     private func wireActions() {
-        overlay.onAdvance = { [weak self] in
-            self?.advanceSelection()
-        }
         overlay.onMove = { [weak self] move in
             self?.moveSelection(move)
         }
@@ -191,17 +179,19 @@ extension SwitcherController {
             self?.hide()
         }
         overlay.onModifierRelease = { [weak self] in
-            guard let self, hasUserNavigatedSinceShow else {
+            // cmd-tab mode: releasing the trigger modifier commits the
+            // selection; otherwise the overlay stays open until
+            // Enter/click/quick-select.
+            guard let self, preferences.switchOnRelease else {
                 return
             }
             selectCurrentWorkspace()
         }
         overlay.onHoverSelect = { [weak self] index in
-            guard let self, workspaces.indices.contains(index), selectedIndex != index else {
+            guard let self, workspaces.indices.contains(index), selection.index != index else {
                 return
             }
-            selectedIndex = index
-            hasUserNavigatedSinceShow = true
+            selection.select(index)
             updateOverlayIfVisible()
         }
         wireSettings()
@@ -286,19 +276,18 @@ extension SwitcherController {
 
 extension SwitcherController {
     private func show(initialMove: SelectionMove) {
-        selectedIndex = focusedWorkspaceIndex(in: workspaces) ?? 0
-        hasUserNavigatedSinceShow = false
+        selection.begin(in: workspaces)
 
         overlay.show(
             items: presentationItems(),
-            selectedIndex: selectedIndex,
+            selectedIndex: selection.index,
             snapshotFeedback: feedbackCoordinator.feedback
         )
         registerVisibleHotKeys()
 
         // cmd-tab style: pre-select the adjacent workspace so a quick tap of
-        // the hotkey commits it as soon as the modifier is released.
-        if preferences.switchOnRelease {
+        // the hotkey moves one workspace over.
+        if preferences.preselectNextOnOpen {
             moveSelection(initialMove)
         }
 
@@ -315,46 +304,30 @@ extension SwitcherController {
         registerLaunchHotKey()
     }
 
-    private func advanceSelection() {
-        guard !workspaces.isEmpty else {
-            return
+    private func cycle(_ move: SelectionMove) {
+        if overlay.isVisible {
+            moveSelection(move)
+        } else {
+            show(initialMove: move)
         }
-        hasUserNavigatedSinceShow = true
-        selectedIndex = (selectedIndex + 1) % workspaces.count
-        updateOverlayIfVisible()
     }
 
     private func moveSelection(_ move: SelectionMove) {
-        guard !workspaces.isEmpty else {
-            return
+        if selection.move(move, count: workspaces.count, columns: preferences.gridColumns) {
+            updateOverlayIfVisible()
         }
+    }
 
-        hasUserNavigatedSinceShow = true
-
-        switch move {
-        case .left:
-            selectedIndex = max(0, selectedIndex - 1)
-        case .right:
-            selectedIndex = min(workspaces.count - 1, selectedIndex + 1)
-        case .up:
-            selectedIndex = max(0, selectedIndex - preferences.gridColumns)
-        case .down:
-            selectedIndex = min(workspaces.count - 1, selectedIndex + preferences.gridColumns)
-        case .next:
-            selectedIndex = (selectedIndex + 1) % workspaces.count
-        case .previous:
-            selectedIndex = (selectedIndex - 1 + workspaces.count) % workspaces.count
-        }
-
-        updateOverlayIfVisible()
+    private var selectedWorkspace: Workspace? {
+        workspaces.indices.contains(selection.index) ? workspaces[selection.index] : nil
     }
 
     private func selectCurrentWorkspace() {
-        guard workspaces.indices.contains(selectedIndex) else {
+        guard let workspace = selectedWorkspace else {
             hide()
             return
         }
-        selectWorkspace(named: workspaces[selectedIndex].name)
+        selectWorkspace(named: workspace.name)
     }
 
     private func selectWorkspace(named name: String) {
@@ -405,15 +378,13 @@ extension SwitcherController {
             if preferences.hideEmptyWorkspaces {
                 fresh = fresh.filter { !$0.isEmpty || $0.isFocused }
             }
-            let selectedName = workspaces.indices.contains(selectedIndex) ? workspaces[selectedIndex].name : nil
+            let previousName = selectedWorkspace?.name
             workspaces = fresh
-            if !overlay.isVisible || !hasUserNavigatedSinceShow {
-                selectedIndex = focusedWorkspaceIndex(in: fresh) ?? 0
-            } else if let selectedName, let index = fresh.firstIndex(where: { $0.name == selectedName }) {
-                selectedIndex = index
-            } else if selectedIndex >= fresh.count {
-                selectedIndex = max(0, fresh.count - 1)
-            }
+            selection.reconcile(
+                previousName: previousName,
+                workspaces: fresh,
+                overlayVisible: overlay.isVisible
+            )
             prewarmSnapshotCache()
             updateOverlayIfVisible()
         case let .failure(error):
@@ -430,7 +401,7 @@ extension SwitcherController {
         }
         overlay.update(
             items: presentationItems(),
-            selectedIndex: selectedIndex,
+            selectedIndex: selection.index,
             snapshotFeedback: feedbackCoordinator.feedback
         )
     }
@@ -450,10 +421,6 @@ extension SwitcherController {
         }
         presentationCache = items
         return items
-    }
-
-    private func focusedWorkspaceIndex(in workspaces: [Workspace]) -> Int? {
-        workspaces.firstIndex(where: \.isFocused)
     }
 }
 

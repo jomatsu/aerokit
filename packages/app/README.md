@@ -4,7 +4,20 @@ One menu-bar app bundling the [AeroSpace](https://github.com/nikitabobko/AeroSpa
 companion tools. A single process, settings window, login item, and Screen
 Recording grant covers every feature.
 
+## Requirements
+
+- macOS 14 (Sonoma) or later
+- [AeroSpace](https://github.com/nikitabobko/AeroSpace) installed and running —
+  AeroKit talks to it through the `aerospace` CLI
+- **Screen Recording** permission for window previews (everything else works
+  without it)
+
 ## Features
+
+<!-- TODO: add screenshots/GIFs per feature, e.g.
+![Switcher](../../docs/images/switcher.png)
+-->
+
 
 ### Switcher (default <kbd>⌥`</kbd>)
 

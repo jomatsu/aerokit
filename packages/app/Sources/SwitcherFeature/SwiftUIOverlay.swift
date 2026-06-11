@@ -9,7 +9,6 @@ public final class SwiftUIOverlay: ObservableObject {
     @Published public private(set) var snapshotFeedback: SnapshotRefreshFeedback = .idle
     @Published public private(set) var isShown = false
 
-    public var onAdvance: (() -> Void)?
     public var onMove: ((SelectionMove) -> Void)?
     public var onSelect: (() -> Void)?
     public var onQuickSelect: ((String) -> Void)?
@@ -199,12 +198,8 @@ public final class SwiftUIOverlay: ObservableObject {
         let isShifted = event.modifierFlags.contains(.shift)
 
         switch event.keyCode {
-        case preferences.hotKey.keyCode:
-            if isShifted {
-                onMove?(.previous)
-            } else {
-                onAdvance?()
-            }
+        case preferences.hotKey.keyCode, KeyCode.tab:
+            onMove?(isShifted ? .previous : .next)
         case KeyCode.return, KeyCode.keypadEnter:
             onSelect?()
         case KeyCode.escape:
@@ -217,8 +212,6 @@ public final class SwiftUIOverlay: ObservableObject {
             onMove?(.down)
         case KeyCode.upArrow:
             onMove?(.up)
-        case KeyCode.tab:
-            onMove?(isShifted ? .previous : .next)
         default:
             return false
         }

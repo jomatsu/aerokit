@@ -15,6 +15,8 @@ struct SwitcherSettingsView: View {
             SettingsSection("General") {
                 switchOnReleaseRow
                 SettingsDivider()
+                preselectNextRow
+                SettingsDivider()
                 hideEmptyRow
                 SettingsDivider()
                 overlayHintsRow
@@ -58,9 +60,18 @@ struct SwitcherSettingsView: View {
     private var switchOnReleaseRow: some View {
         SettingsRow(
             title: "Switch on Release",
-            subtitle: "Tap the hotkey to jump straight to the next workspace"
+            subtitle: "Releasing the modifier switches, ⌘⇥ style. Off: confirm with Return"
         ) {
             SettingsToggle(isOn: $preferences.switchOnRelease)
+        }
+    }
+
+    private var preselectNextRow: some View {
+        SettingsRow(
+            title: "Start on Next Workspace",
+            subtitle: "Open with the adjacent workspace pre-selected instead of the current one"
+        ) {
+            SettingsToggle(isOn: $preferences.preselectNextOnOpen)
         }
     }
 
