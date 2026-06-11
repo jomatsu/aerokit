@@ -38,14 +38,16 @@ final class ExposeOverlay {
         }
     }
 
-    func show(session: ExposeSession, on screen: NSScreen) {
+    func show(session: ExposeSession, on screen: NSScreen, showsGroupingHint: Bool) {
         self.session = session
         let view = ExposeOverlayView(
             session: session,
             quickSelectExclusion: groupToggleKey,
+            showsGroupingHint: showsGroupingHint,
             onActivate: { [weak self] index in self?.onActivate?(index) },
             onHover: { [weak self] index in self?.hover(index) },
-            onCancel: { [weak self] in self?.onCancel?() }
+            onCancel: { [weak self] in self?.onCancel?() },
+            onToggleGrouping: { [weak self] in self?.onToggleGrouping?() }
         )
         panel.contentView = NSHostingView(rootView: view)
         panel.setFrame(screen.frame, display: true)

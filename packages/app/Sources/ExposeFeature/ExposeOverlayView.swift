@@ -7,9 +7,13 @@ struct ExposeOverlayView: View {
     let session: ExposeSession
     /// The grouping-toggle key, skipped by the quick-select labels.
     let quickSelectExclusion: Character?
+    /// Whether the bottom bar advertises the grouping-toggle key; off for
+    /// the app scope (no grouping there) and via the preference.
+    let showsGroupingHint: Bool
     let onActivate: (Int) -> Void
     let onHover: (Int) -> Void
     let onCancel: () -> Void
+    let onToggleGrouping: () -> Void
 
     @State private var appeared = false
 
@@ -23,6 +27,12 @@ struct ExposeOverlayView: View {
             }
             .opacity(appeared ? 1 : 0)
             .scaleEffect(appeared ? 1 : 0.97)
+
+            if showsGroupingHint {
+                groupingHintBar
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .opacity(appeared ? 1 : 0)
+            }
         }
         .ignoresSafeArea()
         .onAppear {
@@ -38,6 +48,43 @@ struct ExposeOverlayView: View {
             .overlay(Color.black.opacity(0.32))
             .contentShape(Rectangle())
             .onTapGesture(perform: onCancel)
+    }
+
+    /// Raycast-style action bar: the grouping action's name next to its
+    /// keycap, clickable as a fallback for the key. The label follows the
+    /// session so it always names what pressing the key would do next.
+    private var groupingHintBar: some View {
+        Button(action: onToggleGrouping) {
+            HStack(spacing: 8) {
+                Text(session.isGroupedByApp ? "Ungroup" : "Group by App")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.78))
+                keycap(String(quickSelectExclusion ?? "0"))
+            }
+            .padding(.leading, 13)
+            .padding(.trailing, 9)
+            .frame(height: 34)
+            .background(.black.opacity(0.45), in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 14)
+    }
+
+    private func keycap(_ label: String) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        return Text(label)
+            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white.opacity(0.95))
+            .frame(minWidth: 18)
+            .frame(height: 18)
+            .background(.white.opacity(0.14), in: shape)
+            .overlay {
+                shape.strokeBorder(.white.opacity(0.22), lineWidth: 1)
+            }
     }
 
     @ViewBuilder private func grid(in size: CGSize) -> some View {

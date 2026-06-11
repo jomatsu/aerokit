@@ -189,7 +189,11 @@ public final class ExposeController {
             groupByApp: scope == .workspace && preferences.groupByApp
         )
         self.session = session
-        overlay.show(session: session, on: screen)
+        overlay.show(
+            session: session,
+            on: screen,
+            showsGroupingHint: scope == .workspace && preferences.showGroupToggleHint
+        )
         startCaptures(session: session, bounds: context.bounds, screen: screen)
 
         startDigitInterceptorIfEnabled()

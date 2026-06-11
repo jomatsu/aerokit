@@ -89,6 +89,13 @@ struct ExposeSettingsView: View {
                     model.setHotKeyRecording(isRecording)
                 }
             }
+            SettingsDivider()
+            SettingsRow(
+                title: "Show grouping shortcut hint",
+                subtitle: "Display the \(preferences.groupToggleKey) key hint at the bottom of the overview"
+            ) {
+                SettingsToggle(isOn: $preferences.showGroupToggleHint)
+            }
         }
     }
 }

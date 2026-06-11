@@ -50,6 +50,12 @@ public final class ExposePreferences: ObservableObject {
         groupToggleKey.first ?? "0"
     }
 
+    /// Show the grouping-toggle key as an on-screen hint while the
+    /// workspace overview is open.
+    @Published public var showGroupToggleHint: Bool {
+        didSet { defaults.set(showGroupToggleHint, forKey: Keys.showGroupToggleHint) }
+    }
+
     private let defaults: UserDefaults
 
     private enum Keys {
@@ -58,6 +64,7 @@ public final class ExposePreferences: ObservableObject {
         static let modifierQuickSelect = "expose.modifierQuickSelect"
         static let groupByApp = "expose.groupByApp"
         static let groupToggleKey = "expose.groupToggleKey"
+        static let showGroupToggleHint = "expose.showGroupToggleHint"
     }
 
     public init(defaults: UserDefaults = .standard) {
@@ -68,5 +75,6 @@ public final class ExposePreferences: ObservableObject {
         groupByApp = defaults.bool(forKey: Keys.groupByApp)
         let storedToggleKey = defaults.string(forKey: Keys.groupToggleKey)?.uppercased().first
         groupToggleKey = storedToggleKey.map(String.init) ?? "0"
+        showGroupToggleHint = defaults.object(forKey: Keys.showGroupToggleHint) as? Bool ?? true
     }
 }
