@@ -1,0 +1,66 @@
+# AeroKit
+
+One menu-bar app bundling the [AeroSpace](https://github.com/nikitabobko/AeroSpace)
+companion tools. A single process, settings window, login item, and Screen
+Recording grant covers every feature.
+
+## Features
+
+### Switcher (default <kbd>⌥`</kbd>)
+
+Cmd-Tab-style workspace switcher with snapshot previews. Hold the modifier
+and tap the key to cycle; release to switch. Snapshots refresh in the
+background and on demand.
+
+### Exposé (default <kbd>⌥M</kbd>)
+
+Mission-Control-style overview of the focused workspace: live window
+previews in a grid, laid out the way the windows sit on screen.
+Click / <kbd>Return</kbd> / <kbd>1</kbd>–<kbd>9</kbd> focuses a window;
+<kbd>Esc</kbd> or the hotkey dismisses. Windows are never moved — the
+overview is a pure overlay, so it can't disturb the layout.
+
+Both hotkeys are configurable from the settings window (menu bar icon →
+Settings).
+
+## Install
+
+```sh
+scripts/install-app.sh
+```
+
+Builds a release binary, wraps it into `~/Applications/AeroKit.app`, and
+registers a LaunchAgent. The installer also retires the pre-unification
+`AeroSwitcher.app` / `AeroExpose.app` and their LaunchAgents; preferences
+carry over automatically.
+
+Grant **Screen Recording** in the settings window when prompted — previews
+need it (the apps still work without it, minus previews).
+
+CLI entry points for scripting / AeroSpace keybindings:
+
+```sh
+AeroKit --open-settings
+AeroKit --toggle-expose
+```
+
+## Architecture
+
+```
+Sources/
+  AeroKitCore      shared infrastructure: AeroSpace CLI client, process
+                   runner, Carbon hotkeys, window capture (CGWindowList fast
+                   path + ScreenCaptureKit fallback, process-wide concurrency
+                   limit), permissions, login item, settings UI primitives
+  SwitcherFeature  workspace switcher: overlay, snapshot engine & scheduler
+  ExposeFeature    window overview: overlay, grid layout, live previews
+  AeroKit          app shell: status bar, unified settings window, hotkey
+                   dispatch, preference migration
+```
+
+## Development
+
+```sh
+swift build
+swift test
+```

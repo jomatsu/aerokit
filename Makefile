@@ -1,4 +1,4 @@
-PACKAGES := packages/switcher
+PACKAGES := packages/app
 
 .PHONY: bootstrap
 bootstrap:
@@ -29,4 +29,4 @@ check: lint build test
 
 .PHONY: install
 install:
-	packages/switcher/scripts/install-app.sh
+	@for package in $(PACKAGES); do "$$package/scripts/install-app.sh" || exit 1; done

@@ -6,7 +6,7 @@ A monorepo of [AeroSpace](https://github.com/nikitabobko/AeroSpace) companion to
 
 | Package | Description |
 | --- | --- |
-| [`packages/switcher`](packages/switcher) | AeroSwitcher — a native SwiftUI workspace switcher with snapshot previews |
+| [`packages/app`](packages/app) | AeroKit — menu-bar app bundling the workspace switcher (snapshot previews) and the Exposé-style window overview |
 
 ## Development
 
