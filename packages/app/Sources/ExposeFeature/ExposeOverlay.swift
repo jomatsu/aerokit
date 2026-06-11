@@ -97,13 +97,12 @@ final class ExposeOverlay {
 
     private func quickSelectIndex(from event: NSEvent) -> Int? {
         guard let character = event.charactersIgnoringModifiers?.first,
-              let digit = character.wholeNumberValue,
-              (1 ... 9).contains(digit),
+              let index = QuickSelect.index(for: character),
               let session,
-              session.tiles.indices.contains(digit - 1)
+              session.tiles.indices.contains(index)
         else {
             return nil
         }
-        return digit - 1
+        return index
     }
 }

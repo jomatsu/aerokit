@@ -16,7 +16,8 @@ background and on demand.
 
 Mission-Control-style overview of the focused workspace: live window
 previews in a grid, laid out the way the windows sit on screen.
-Click / <kbd>Return</kbd> / <kbd>1</kbd>–<kbd>9</kbd> focuses a window;
+Click / <kbd>Return</kbd> / <kbd>1</kbd>–<kbd>9</kbd> (then <kbd>A</kbd>–<kbd>Z</kbd>)
+focuses a window;
 <kbd>Esc</kbd> or the hotkey dismisses. Windows are never moved — the
 overview is a pure overlay, so it can't disturb the layout.
 

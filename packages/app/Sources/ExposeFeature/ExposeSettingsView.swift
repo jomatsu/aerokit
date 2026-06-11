@@ -57,7 +57,7 @@ struct ExposeSettingsView: View {
             SettingsSection("Tips") {
                 SettingsRow(
                     title: "While the overview is open",
-                    subtitle: "Click or press 1–9 to focus a window · arrows move · Esc dismisses"
+                    subtitle: "Click or press 1–9 / A–Z to focus a window · arrows move · Esc dismisses"
                 ) {
                     EmptyView()
                 }

@@ -64,16 +64,12 @@ public final class AeroSpaceClient: Sendable {
     // MARK: - Workspaces
 
     public func listWorkspaces() throws -> [(name: String, isFocused: Bool)] {
-        let format = ["%{workspace}", "%{workspace-is-focused}"].joined(separator: separator)
-
-        return try run(["list-workspaces", "--all", "--format", format])
-            .split(whereSeparator: \.isNewline)
-            .compactMap { line in
-                let fields = line.split(separator: Character(separator), omittingEmptySubsequences: false)
+        try runFields(["list-workspaces", "--all"], format: ["%{workspace}", "%{workspace-is-focused}"])
+            .compactMap { fields in
                 guard fields.count >= 2, !fields[0].isEmpty else {
                     return nil
                 }
-                return (name: String(fields[0]), isFocused: fields[1] == "true")
+                return (name: fields[0], isFocused: fields[1] == "true")
             }
     }
 
@@ -93,10 +89,9 @@ public final class AeroSpaceClient: Sendable {
             "%{window-layout}",
             "%{window-parent-container-layout}",
             "%{workspace-root-container-layout}"
-        ].joined(separator: separator)
+        ]
 
-        return try run(["list-windows", "--all", "--format", format])
-            .split(whereSeparator: \.isNewline)
+        return try runFields(["list-windows", "--all"], format: format)
             .compactMap(parseWindowLine)
     }
 
@@ -133,20 +128,16 @@ public final class AeroSpaceClient: Sendable {
             "%{app-bundle-id}",
             "%{app-pid}",
             "%{monitor-appkit-nsscreen-screens-id}"
-        ].joined(separator: separator)
+        ]
 
-        guard let output = try? run(["list-windows", "--focused", "--format", format]),
-              let line = output.split(whereSeparator: \.isNewline).first
+        guard let fields = (try? runFields(["list-windows", "--focused"], format: format))?.first,
+              fields.count >= 4, let id = CGWindowID(fields[0])
         else {
-            return nil
-        }
-        let fields = line.split(separator: Character(separator), omittingEmptySubsequences: false)
-        guard fields.count >= 4, let id = CGWindowID(fields[0]) else {
             return nil
         }
         return FocusedWindow(
             id: id,
-            bundleIdentifier: String(fields[1]),
+            bundleIdentifier: fields[1],
             pid: Int32(fields[2]),
             screenNumber: Int(fields[3])
         )
@@ -159,20 +150,18 @@ public final class AeroSpaceClient: Sendable {
             "%{app-name}",
             "%{window-title}",
             "%{monitor-appkit-nsscreen-screens-id}"
-        ].joined(separator: separator)
+        ]
 
         var snapshot = WorkspaceSnapshot(windows: [])
-        let output = try run(listArguments + ["--format", format])
-        for line in output.split(whereSeparator: \.isNewline) {
-            let fields = line.split(separator: Character(separator), omittingEmptySubsequences: false)
+        for fields in try runFields(listArguments, format: format) {
             guard fields.count >= 5, let id = CGWindowID(fields[0]) else {
                 continue
             }
             snapshot.windows.append(ExposeWindow(
                 id: id,
-                bundleIdentifier: String(fields[1]),
-                appName: String(fields[2]),
-                title: String(fields[3])
+                bundleIdentifier: fields[1],
+                appName: fields[2],
+                title: fields[3]
             ))
             snapshot.screenNumber = snapshot.screenNumber ?? Int(fields[4])
         }
@@ -207,8 +196,19 @@ public final class AeroSpaceClient: Sendable {
         try runner.run(executablePath, arguments: arguments).standardOutput
     }
 
-    private func parseWindowLine(_ line: Substring) -> WorkspaceWindow? {
-        let fields = line.split(separator: Character(separator), omittingEmptySubsequences: false).map(String.init)
+    /// Runs a list command with `--format` built from `fields` and splits the
+    /// output back into one column array per line. Empty columns are kept so
+    /// positions stay stable; lines can still come back short (older
+    /// aerospace builds emit fewer columns), so callers guard their minimums.
+    private func runFields(_ arguments: [String], format: [String]) throws -> [[String]] {
+        try run(arguments + ["--format", format.joined(separator: separator)])
+            .split(whereSeparator: \.isNewline)
+            .map { line in
+                line.split(separator: Character(separator), omittingEmptySubsequences: false).map(String.init)
+            }
+    }
+
+    private func parseWindowLine(_ fields: [String]) -> WorkspaceWindow? {
         guard fields.count >= 5 else {
             return nil
         }

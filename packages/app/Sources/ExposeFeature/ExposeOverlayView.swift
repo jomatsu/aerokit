@@ -61,7 +61,7 @@ struct ExposeOverlayView: View {
     private func tileView(at index: Int, cell: CGSize) -> some View {
         WindowTile(
             tile: session.tiles[index],
-            number: index < 9 ? index + 1 : nil,
+            shortcut: QuickSelect.label(forIndex: index),
             isSelected: index == session.selectedIndex,
             cell: cell,
             onActivate: { onActivate(index) },
@@ -79,7 +79,7 @@ struct ExposeOverlayView: View {
 
 private struct WindowTile: View {
     let tile: ExposeSession.Tile
-    let number: Int?
+    let shortcut: String?
     let isSelected: Bool
     let cell: CGSize
     let onActivate: () -> Void
@@ -121,7 +121,7 @@ private struct WindowTile: View {
                 )
             }
             .overlay(alignment: .topLeading) {
-                numberBadge
+                shortcutBadge
             }
             .animation(.easeOut(duration: 0.15), value: tile.image == nil)
     }
@@ -145,14 +145,21 @@ private struct WindowTile: View {
         }
     }
 
-    @ViewBuilder private var numberBadge: some View {
-        if let number {
-            Text("\(number)")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.92))
-                .frame(width: 20, height: 20)
-                .background(.black.opacity(0.5), in: Circle())
-                .padding(8)
+    /// Raycast-style keycap hint: a small rounded square, not a numbered
+    /// circle, so it reads as "the key to press".
+    @ViewBuilder private var shortcutBadge: some View {
+        if let shortcut {
+            let shape = RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+            Text(shortcut)
+                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.95))
+                .frame(minWidth: 18)
+                .frame(height: 18)
+                .background(.black.opacity(0.45), in: shape)
+                .overlay {
+                    shape.strokeBorder(.white.opacity(0.22), lineWidth: 1)
+                }
+                .padding(7)
         }
     }
 
