@@ -12,8 +12,19 @@ public final class ExposePreferences: ObservableObject {
         keyLabel: "M"
     )
 
+    public static let defaultAppHotKey = HotKeySpec(
+        keyCode: UInt16(kVK_ANSI_A),
+        modifierRawValue: NSEvent.ModifierFlags.option.rawValue,
+        keyLabel: "A"
+    )
+
     @Published public var hotKey: HotKeySpec {
         didSet { hotKey.store(in: defaults, key: Keys.hotKey) }
+    }
+
+    /// App exposé: the focused app's windows from every workspace.
+    @Published public var appHotKey: HotKeySpec {
+        didSet { appHotKey.store(in: defaults, key: Keys.appHotKey) }
     }
 
     /// While the overview is open, claim ⌥1–9 for window selection instead
@@ -26,12 +37,14 @@ public final class ExposePreferences: ObservableObject {
 
     private enum Keys {
         static let hotKey = "expose.hotKey"
+        static let appHotKey = "expose.appHotKey"
         static let modifierQuickSelect = "expose.modifierQuickSelect"
     }
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         hotKey = HotKeySpec.load(from: defaults, key: Keys.hotKey) ?? Self.defaultHotKey
+        appHotKey = HotKeySpec.load(from: defaults, key: Keys.appHotKey) ?? Self.defaultAppHotKey
         modifierQuickSelect = defaults.object(forKey: Keys.modifierQuickSelect) as? Bool ?? true
     }
 }

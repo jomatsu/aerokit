@@ -3,6 +3,7 @@ import AppKit
 @MainActor
 final class StatusBarController: NSObject {
     var onShowOverview: (() -> Void)?
+    var onShowAppWindows: (() -> Void)?
     var onRefreshSnapshots: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onQuit: (() -> Void)?
@@ -29,6 +30,11 @@ final class StatusBarController: NSObject {
         menu.addItem(NSMenuItem(
             title: "Show Window Overview",
             action: #selector(showOverview),
+            keyEquivalent: ""
+        ))
+        menu.addItem(NSMenuItem(
+            title: "Show App Windows",
+            action: #selector(showAppWindows),
             keyEquivalent: ""
         ))
         menu.addItem(NSMenuItem(
@@ -60,6 +66,11 @@ final class StatusBarController: NSObject {
     @objc
     private func showOverview() {
         onShowOverview?()
+    }
+
+    @objc
+    private func showAppWindows() {
+        onShowAppWindows?()
     }
 
     @objc

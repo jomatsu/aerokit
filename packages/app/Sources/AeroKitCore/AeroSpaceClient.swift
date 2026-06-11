@@ -15,6 +15,22 @@ public struct WorkspaceSnapshot: Equatable, Sendable {
     }
 }
 
+/// Identity of the focused window, enough to find its app's other windows.
+public struct FocusedWindow: Equatable, Sendable {
+    public var id: CGWindowID
+    public var bundleIdentifier: String
+    public var pid: Int32?
+    /// 1-based index into `NSScreen.screens` for the window's monitor.
+    public var screenNumber: Int?
+
+    public init(id: CGWindowID, bundleIdentifier: String, pid: Int32? = nil, screenNumber: Int? = nil) {
+        self.id = id
+        self.bundleIdentifier = bundleIdentifier
+        self.pid = pid
+        self.screenNumber = screenNumber
+    }
+}
+
 public final class AeroSpaceClient: Sendable {
     private let executablePath: String
     private let runner: any CommandRunning
@@ -87,6 +103,56 @@ public final class AeroSpaceClient: Sendable {
     // MARK: - Windows (focused workspace)
 
     public func focusedWorkspaceWindows() throws -> WorkspaceSnapshot {
+        try windowSnapshot(listArguments: ["list-windows", "--workspace", "focused"])
+    }
+
+    // MARK: - Windows (focused app)
+
+    /// All windows of one app across every workspace; the app exposé's data
+    /// source. Filters by bundle id when present (one app can span helper
+    /// processes), by pid otherwise (some windows report no bundle id).
+    /// `--app-bundle-id`/`--pid` only combine with `--monitor`, so the "all
+    /// workspaces" part is spelled `--monitor all`.
+    public func appWindows(bundleIdentifier: String, pid: Int32?) throws -> WorkspaceSnapshot {
+        var arguments = ["list-windows", "--monitor", "all"]
+        if !bundleIdentifier.isEmpty {
+            arguments += ["--app-bundle-id", bundleIdentifier]
+        } else if let pid {
+            arguments += ["--pid", String(pid)]
+        } else {
+            return WorkspaceSnapshot(windows: [])
+        }
+        return try windowSnapshot(listArguments: arguments)
+    }
+
+    /// nil when no window has focus (AeroSpace exits non-zero) or the output
+    /// is unparseable; the caller treats both the same way.
+    public func focusedWindow() -> FocusedWindow? {
+        let format = [
+            "%{window-id}",
+            "%{app-bundle-id}",
+            "%{app-pid}",
+            "%{monitor-appkit-nsscreen-screens-id}"
+        ].joined(separator: separator)
+
+        guard let output = try? run(["list-windows", "--focused", "--format", format]),
+              let line = output.split(whereSeparator: \.isNewline).first
+        else {
+            return nil
+        }
+        let fields = line.split(separator: Character(separator), omittingEmptySubsequences: false)
+        guard fields.count >= 4, let id = CGWindowID(fields[0]) else {
+            return nil
+        }
+        return FocusedWindow(
+            id: id,
+            bundleIdentifier: String(fields[1]),
+            pid: Int32(fields[2]),
+            screenNumber: Int(fields[3])
+        )
+    }
+
+    private func windowSnapshot(listArguments: [String]) throws -> WorkspaceSnapshot {
         let format = [
             "%{window-id}",
             "%{app-bundle-id}",
@@ -96,7 +162,7 @@ public final class AeroSpaceClient: Sendable {
         ].joined(separator: separator)
 
         var snapshot = WorkspaceSnapshot(windows: [])
-        let output = try run(["list-windows", "--workspace", "focused", "--format", format])
+        let output = try run(listArguments + ["--format", format])
         for line in output.split(whereSeparator: \.isNewline) {
             let fields = line.split(separator: Character(separator), omittingEmptySubsequences: false)
             guard fields.count >= 5, let id = CGWindowID(fields[0]) else {
@@ -111,15 +177,6 @@ public final class AeroSpaceClient: Sendable {
             snapshot.screenNumber = snapshot.screenNumber ?? Int(fields[4])
         }
         return snapshot
-    }
-
-    /// nil when no window has focus (AeroSpace exits non-zero) or the output
-    /// is unparseable; the caller treats both the same way.
-    public func focusedWindowID() -> CGWindowID? {
-        guard let output = try? run(["list-windows", "--focused", "--format", "%{window-id}"]) else {
-            return nil
-        }
-        return CGWindowID(output.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     public func focusWindow(id: CGWindowID) throws {

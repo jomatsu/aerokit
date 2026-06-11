@@ -20,6 +20,15 @@ struct ExposeSettingsView: View {
                 }
                 SettingsDivider()
                 SettingsRow(
+                    title: "Show app windows",
+                    subtitle: "Lay out the focused app's windows from every workspace"
+                ) {
+                    HotKeyRecorder(spec: $preferences.appHotKey) { isRecording in
+                        model.setHotKeyRecording(isRecording)
+                    }
+                }
+                SettingsDivider()
+                SettingsRow(
                     title: "\u{2325} + number selects windows",
                     subtitle: "\u{2325}1\u{2013}9 focuses a window instead of switching AeroSpace workspaces"
                 ) {
@@ -28,6 +37,10 @@ struct ExposeSettingsView: View {
             }
 
             if let message = model.hotKeyErrorMessage {
+                SettingsErrorBanner(message)
+            }
+
+            if let message = model.appHotKeyErrorMessage {
                 SettingsErrorBanner(message)
             }
 
@@ -63,10 +76,21 @@ struct ExposeSettingsView: View {
 @MainActor
 final class ExposeSettingsModel: ObservableObject {
     @Published var hotKeyErrorMessage: String?
+    @Published var appHotKeyErrorMessage: String?
 
     var onHotKeyRecordingChanged: ((Bool) -> Void)?
 
+    /// Counted because the pane has one recorder per hotkey and the user can
+    /// start the second before finishing the first; the global triggers must
+    /// stay suspended until no recorder is active.
+    private var activeRecorders = 0
+
     func setHotKeyRecording(_ isRecording: Bool) {
-        onHotKeyRecordingChanged?(isRecording)
+        let wasRecording = activeRecorders > 0
+        activeRecorders = max(0, activeRecorders + (isRecording ? 1 : -1))
+        let isRecordingNow = activeRecorders > 0
+        if wasRecording != isRecordingNow {
+            onHotKeyRecordingChanged?(isRecordingNow)
+        }
     }
 }

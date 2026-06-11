@@ -114,7 +114,7 @@ public final class SwitcherController {
             }
         case .escape:
             hide()
-        case .exposeToggle:
+        case .exposeToggle, .exposeAppToggle:
             break
         }
     }
@@ -135,10 +135,7 @@ public final class SwitcherController {
             settingsModel.markHotKeyRegistration(error: nil)
         } catch {
             logError("Failed to register hotkey: \(error)")
-            settingsModel.markHotKeyRegistration(
-                error: "Could not register \(spec.displayKeys.joined()) as the global hotkey. "
-                    + "Another app may already use it — record a different shortcut above."
-            )
+            settingsModel.markHotKeyRegistration(error: spec.registrationFailureMessage)
         }
     }
 

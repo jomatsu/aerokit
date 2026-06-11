@@ -23,6 +23,10 @@ if CommandLine.arguments.contains("--toggle-expose") {
     postAndExit(AeroKitNotification.toggleExpose)
 }
 
+if CommandLine.arguments.contains("--toggle-app-expose") {
+    postAndExit(AeroKitNotification.toggleAppExpose)
+}
+
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: AppCoordinator?
@@ -40,6 +44,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         })
         observers.append(observe(AeroKitNotification.toggleExpose) { [weak self] in
             self?.coordinator?.toggleExpose()
+        })
+        observers.append(observe(AeroKitNotification.toggleAppExpose) { [weak self] in
+            self?.coordinator?.toggleAppExpose()
         })
     }
 

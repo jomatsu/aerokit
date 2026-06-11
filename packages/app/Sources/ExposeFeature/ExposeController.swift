@@ -5,7 +5,15 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
-/// Wires the exposé hotkey, the AeroSpace CLI, the capture pipeline, and the
+/// What one overlay presentation shows: the focused workspace's windows
+/// (mission-control-like) or the focused app's windows from every workspace
+/// (app-exposé-like).
+enum ExposeScope {
+    case workspace
+    case app
+}
+
+/// Wires the exposé hotkeys, the AeroSpace CLI, the capture pipeline, and the
 /// overlay into the toggle-overview-click-to-focus loop.
 @MainActor
 public final class ExposeController {
@@ -19,6 +27,9 @@ public final class ExposeController {
     private let digitInterceptor = ExposeDigitInterceptor()
 
     private var session: ExposeSession?
+    /// Scope of the most recent presentation request; kept even when the
+    /// request produced no overlay (re-pressing then simply retries).
+    private var requestedScope = ExposeScope.workspace
     private var presentTask: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
     /// Bumped by every present/dismiss so a presentation that was superseded
@@ -41,17 +52,18 @@ public final class ExposeController {
         digitInterceptor.onDigit = { [weak self] digit in self?.activate(digit - 1) }
 
         settingsModel.onHotKeyRecordingChanged = { [weak self] isRecording in
-            // Suspend the global trigger while recording so the chosen
+            // Suspend the global triggers while recording so the chosen
             // combination reaches the recorder instead of toggling the overview.
             guard let self else { return }
             if isRecording {
                 hotKeyCenter.unregister(.exposeToggle)
+                hotKeyCenter.unregister(.exposeAppToggle)
             } else {
-                registerHotKey()
+                registerHotKeys()
             }
         }
 
-        registerHotKey()
+        registerHotKeys()
         observePreferences()
     }
 
@@ -61,37 +73,65 @@ public final class ExposeController {
     }
 
     public func toggle() {
-        if overlay.isVisible || presentTask != nil {
-            dismiss()
-        } else {
-            present()
-        }
+        toggle(scope: .workspace)
     }
 
-    private func registerHotKey() {
-        let spec = preferences.hotKey
+    public func toggleAppWindows() {
+        toggle(scope: .app)
+    }
+
+    /// The other scope's hotkey while the overview is open switches scopes
+    /// instead of dismissing, mirroring Mission Control vs App Exposé.
+    private func toggle(scope: ExposeScope) {
+        let isActive = overlay.isVisible || presentTask != nil
+        if isActive {
+            dismiss()
+            if scope == requestedScope {
+                return
+            }
+        }
+        requestedScope = scope
+        present(scope: scope)
+    }
+
+    private func registerHotKeys() {
+        registerWorkspaceHotKey()
+        registerAppHotKey()
+    }
+
+    /// Unregister first so a changed spec replaces the live binding instead
+    /// of silently keeping the old one; each role owns its error message.
+    private func registerWorkspaceHotKey() {
+        hotKeyCenter.unregister(.exposeToggle)
+        settingsModel.hotKeyErrorMessage = registerHotKey(.exposeToggle, spec: preferences.hotKey)
+    }
+
+    private func registerAppHotKey() {
+        hotKeyCenter.unregister(.exposeAppToggle)
+        settingsModel.appHotKeyErrorMessage = registerHotKey(.exposeAppToggle, spec: preferences.appHotKey)
+    }
+
+    /// Returns the user-facing error message, nil on success.
+    private func registerHotKey(_ role: HotKeyRole, spec: HotKeySpec) -> String? {
         do {
             try hotKeyCenter.register(
-                .exposeToggle,
+                role,
                 keyCode: UInt32(spec.keyCode),
                 modifiers: spec.carbonModifiers
             )
-            settingsModel.hotKeyErrorMessage = nil
+            return nil
         } catch {
-            fputs("AeroKit: exposé hotkey registration failed: \(error)\n", stderr)
-            settingsModel.hotKeyErrorMessage =
-                "Could not register \(spec.displayKeys.joined()) as the global hotkey. "
-                    + "Another app may already use it — record a different shortcut above."
+            fputs("AeroKit: exposé hotkey \(spec.displayKeys.joined()) registration failed: \(error)\n", stderr)
+            return spec.registrationFailureMessage
         }
     }
 
     private func observePreferences() {
         preferences.$hotKey.dropFirst()
-            .sink { [weak self] _ in
-                guard let self else { return }
-                hotKeyCenter.unregister(.exposeToggle)
-                registerHotKey()
-            }
+            .sink { [weak self] _ in self?.registerWorkspaceHotKey() }
+            .store(in: &cancellables)
+        preferences.$appHotKey.dropFirst()
+            .sink { [weak self] _ in self?.registerAppHotKey() }
             .store(in: &cancellables)
     }
 
@@ -105,38 +145,25 @@ public final class ExposeController {
         var bounds: [CGWindowID: CGRect]
     }
 
-    private func present() {
+    private func present(scope: ExposeScope) {
         presentEpoch += 1
         let epoch = presentEpoch
         presentTask = Task { [weak self] in
-            await self?.runPresentation(epoch: epoch)
+            await self?.runPresentation(epoch: epoch, scope: scope)
         }
     }
 
-    private func runPresentation(epoch: Int) async {
+    private func runPresentation(epoch: Int, scope: ExposeScope) async {
         let client = client
         let capturer = capturer
         // One background hop for the blocking CLI and WindowServer queries.
         let context = await Task.detached(priority: .userInitiated) { () -> PresentationContext? in
-            // The focused-window query only seeds the initial selection, so
-            // run it concurrently instead of paying a second CLI round trip
-            // before the overlay can show.
-            async let focusedWindowID = client.focusedWindowID()
-            let snapshot: WorkspaceSnapshot
-            do {
-                snapshot = try client.focusedWorkspaceWindows()
-            } catch {
-                fputs("AeroKit: listing workspace windows failed: \(error)\n", stderr)
-                return nil
+            switch scope {
+            case .workspace:
+                await Self.workspaceContext(client: client, capturer: capturer)
+            case .app:
+                await Self.appContext(client: client, capturer: capturer)
             }
-            guard !snapshot.windows.isEmpty else {
-                return nil
-            }
-            return await PresentationContext(
-                snapshot: snapshot,
-                focusedWindowID: focusedWindowID,
-                bounds: capturer.windowBoundsByID()
-            )
         }.value
 
         guard epoch == presentEpoch else {
@@ -160,6 +187,67 @@ public final class ExposeController {
         startCaptures(session: session, bounds: context.bounds, screen: screen)
 
         startDigitInterceptorIfEnabled()
+    }
+
+    private nonisolated static func workspaceContext(
+        client: AeroSpaceClient,
+        capturer: WindowImageCapturer
+    ) async -> PresentationContext? {
+        // The focused-window query only seeds the initial selection, so
+        // run it concurrently instead of paying a second CLI round trip
+        // before the overlay can show.
+        async let focused = client.focusedWindow()
+        guard let snapshot = loadSnapshot("workspace", try client.focusedWorkspaceWindows()) else {
+            return nil
+        }
+        return await PresentationContext(
+            snapshot: snapshot,
+            focusedWindowID: focused?.id,
+            bounds: capturer.windowBoundsByID()
+        )
+    }
+
+    /// The CLI calls are sequential by necessity — the focused window's app
+    /// determines which windows to list.
+    private nonisolated static func appContext(
+        client: AeroSpaceClient,
+        capturer: WindowImageCapturer
+    ) async -> PresentationContext? {
+        // The bounds query talks to the WindowServer, not the CLI, so it can
+        // overlap the dependent CLI round trips.
+        async let bounds = capturer.windowBoundsByID()
+        guard let focused = client.focusedWindow() else {
+            fputs("AeroKit: app exposé: no focused window\n", stderr)
+            return nil
+        }
+        guard var snapshot = loadSnapshot(
+            "app", try client.appWindows(bundleIdentifier: focused.bundleIdentifier, pid: focused.pid)
+        ) else {
+            return nil
+        }
+        // The app's windows can span monitors; the overlay belongs on the
+        // one hosting the focused window.
+        snapshot.screenNumber = focused.screenNumber ?? snapshot.screenNumber
+        return await PresentationContext(
+            snapshot: snapshot,
+            focusedWindowID: focused.id,
+            bounds: bounds
+        )
+    }
+
+    /// nil (logged) on CLI failure, nil on an empty listing — neither shows
+    /// an overlay.
+    private nonisolated static func loadSnapshot(
+        _ label: String,
+        _ list: @autoclosure () throws -> WorkspaceSnapshot
+    ) -> WorkspaceSnapshot? {
+        do {
+            let snapshot = try list()
+            return snapshot.windows.isEmpty ? nil : snapshot
+        } catch {
+            fputs("AeroKit: listing \(label) windows failed: \(error)\n", stderr)
+            return nil
+        }
     }
 
     private func startDigitInterceptorIfEnabled() {

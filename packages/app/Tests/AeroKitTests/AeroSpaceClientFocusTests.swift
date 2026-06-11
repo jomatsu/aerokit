@@ -56,14 +56,78 @@ final class AeroSpaceClientFocusTests: XCTestCase {
         XCTAssertNil(snapshot.screenNumber)
     }
 
-    // MARK: - focusedWindowID
+    // MARK: - focusedWindow
 
-    func testFocusedWindowIDParsesTrimmedOutput() {
-        XCTAssertEqual(makeClient(StubRunner(output: "42\n")).focusedWindowID(), 42)
+    func testFocusedWindowParsesAllFields() {
+        let runner = StubRunner(output: "42\(us)com.apple.Safari\(us)1184\(us)2\n")
+
+        let focused = makeClient(runner).focusedWindow()
+
+        XCTAssertEqual(focused, FocusedWindow(
+            id: 42,
+            bundleIdentifier: "com.apple.Safari",
+            pid: 1184,
+            screenNumber: 2
+        ))
+        XCTAssertEqual(runner.calls.first, [
+            "list-windows", "--focused", "--format",
+            [
+                "%{window-id}",
+                "%{app-bundle-id}",
+                "%{app-pid}",
+                "%{monitor-appkit-nsscreen-screens-id}"
+            ].joined(separator: us)
+        ])
     }
 
-    func testFocusedWindowIDIsNilWhenCommandFails() {
-        XCTAssertNil(makeClient(StubRunner(error: StubRunner.Failure())).focusedWindowID())
+    func testFocusedWindowToleratesEmptyBundleAndPid() {
+        let focused = makeClient(StubRunner(output: "7\(us)\(us)\(us)1\n")).focusedWindow()
+
+        XCTAssertEqual(focused, FocusedWindow(id: 7, bundleIdentifier: "", pid: nil, screenNumber: 1))
+    }
+
+    func testFocusedWindowIsNilWhenCommandFails() {
+        XCTAssertNil(makeClient(StubRunner(error: StubRunner.Failure())).focusedWindow())
+    }
+
+    func testFocusedWindowIsNilOnEmptyOutput() {
+        XCTAssertNil(makeClient(StubRunner(output: "")).focusedWindow())
+    }
+
+    // MARK: - appWindows
+
+    func testAppWindowsFiltersByBundleIdentifier() throws {
+        let runner = StubRunner(output: """
+        201\(us)com.apple.Safari\(us)Safari\(us)Apple\(us)1
+        202\(us)com.apple.Safari\(us)Safari\(us)Docs\(us)2
+        """)
+
+        let snapshot = try makeClient(runner).appWindows(bundleIdentifier: "com.apple.Safari", pid: 99)
+
+        XCTAssertEqual(snapshot.windows.map(\.id), [201, 202])
+        XCTAssertEqual(snapshot.screenNumber, 1)
+        XCTAssertEqual(runner.calls.first?.prefix(5), [
+            "list-windows", "--monitor", "all", "--app-bundle-id", "com.apple.Safari"
+        ])
+    }
+
+    func testAppWindowsFallsBackToPidWithoutBundleIdentifier() throws {
+        let runner = StubRunner(output: "")
+
+        _ = try makeClient(runner).appWindows(bundleIdentifier: "", pid: 1184)
+
+        XCTAssertEqual(runner.calls.first?.prefix(5), [
+            "list-windows", "--monitor", "all", "--pid", "1184"
+        ])
+    }
+
+    func testAppWindowsWithoutAnyFilterReturnsEmptySnapshot() throws {
+        let runner = StubRunner(output: "ignored")
+
+        let snapshot = try makeClient(runner).appWindows(bundleIdentifier: "", pid: nil)
+
+        XCTAssertTrue(snapshot.windows.isEmpty)
+        XCTAssertTrue(runner.calls.isEmpty, "No filter must not list every window on the system")
     }
 
     // MARK: - focusWindow

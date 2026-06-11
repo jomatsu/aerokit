@@ -35,6 +35,7 @@ final class AppCoordinator {
         }
 
         statusBar.onShowOverview = { [weak self] in self?.expose.toggle() }
+        statusBar.onShowAppWindows = { [weak self] in self?.expose.toggleAppWindows() }
         statusBar.onRefreshSnapshots = { [weak self] in self?.switcher.refreshSnapshotsFromMenu() }
         statusBar.onOpenSettings = { [weak self] in self?.showSettings() }
         statusBar.onQuit = { NSApp.terminate(nil) }
@@ -91,12 +92,18 @@ final class AppCoordinator {
         expose.toggle()
     }
 
+    func toggleAppExpose() {
+        expose.toggleAppWindows()
+    }
+
     private func dispatch(_ role: HotKeyRole) {
         switch role {
         case .cycleForward, .cycleBackward, .escape:
             switcher.handle(role)
         case .exposeToggle:
             expose.toggle()
+        case .exposeAppToggle:
+            expose.toggleAppWindows()
         }
     }
 }

@@ -20,7 +20,14 @@ Click / <kbd>Return</kbd> / <kbd>1</kbd>–<kbd>9</kbd> focuses a window;
 <kbd>Esc</kbd> or the hotkey dismisses. Windows are never moved — the
 overview is a pure overlay, so it can't disturb the layout.
 
-Both hotkeys are configurable from the settings window (menu bar icon →
+### App Exposé (default <kbd>⌥A</kbd>)
+
+The same overview scoped to the focused app: its windows from every
+workspace in one grid. Activating a window on another workspace switches
+there. Pressing one overview's hotkey while the other is open switches
+scopes, like Mission Control vs App Exposé.
+
+All hotkeys are configurable from the settings window (menu bar icon →
 Settings).
 
 ## Install
@@ -42,6 +49,7 @@ CLI entry points for scripting / AeroSpace keybindings:
 ```sh
 AeroKit --open-settings
 AeroKit --toggle-expose
+AeroKit --toggle-app-expose
 ```
 
 ## Architecture

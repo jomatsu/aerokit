@@ -6,4 +6,5 @@ import Foundation
 public enum AeroKitNotification {
     public static let openSettings = Notification.Name("com.nasubikun.aerokit.open-settings")
     public static let toggleExpose = Notification.Name("com.nasubikun.aerokit.toggle-expose")
+    public static let toggleAppExpose = Notification.Name("com.nasubikun.aerokit.toggle-app-expose")
 }

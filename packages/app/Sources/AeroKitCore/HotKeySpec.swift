@@ -72,6 +72,12 @@ public struct HotKeySpec: Codable, Equatable, Sendable {
         return keys
     }
 
+    /// Settings-pane message when RegisterEventHotKey rejects the combination.
+    public var registrationFailureMessage: String {
+        "Could not register \(displayKeys.joined()) as the global hotkey. "
+            + "Another app may already use it — record a different shortcut above."
+    }
+
     /// JSON round-trip in UserDefaults; every feature persists its hotkeys
     /// this way.
     public static func load(from defaults: UserDefaults, key: String) -> HotKeySpec? {
