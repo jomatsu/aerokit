@@ -20,7 +20,7 @@ public final class WorkspaceRepository: @unchecked Sendable {
                 let workspaceWindows = windowsByWorkspace[listing.name] ?? []
                 return Workspace(
                     name: listing.name,
-                    apps: uniqueApps(from: workspaceWindows),
+                    apps: WorkspaceApp.uniqueApps(from: workspaceWindows),
                     isFocused: listing.isFocused,
                     isEmpty: workspaceWindows.isEmpty
                 )
@@ -32,22 +32,6 @@ public final class WorkspaceRepository: @unchecked Sendable {
 
     public func switchToWorkspace(_ name: String) throws {
         try client.switchToWorkspace(name)
-    }
-
-    private func uniqueApps(from windows: [WorkspaceWindow]) -> [WorkspaceApp] {
-        var seen = Set<String>()
-        var apps: [WorkspaceApp] = []
-
-        for window in windows {
-            let key = window.bundleIdentifier.isEmpty ? window.appName : window.bundleIdentifier
-            guard !seen.contains(key) else {
-                continue
-            }
-            seen.insert(key)
-            apps.append(WorkspaceApp(name: window.appName, bundleIdentifier: window.bundleIdentifier))
-        }
-
-        return apps
     }
 
     private func compareWorkspaceNames(_ lhs: String, _ rhs: String) -> Bool {

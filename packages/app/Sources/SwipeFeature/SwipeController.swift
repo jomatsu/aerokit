@@ -20,6 +20,7 @@ public final class SwipeController {
     private let workspacePreview: (String) -> NSImage?
     /// Thumbnails resolved for the gesture in flight, reused at settle.
     private var currentPreviews: [String: NSImage] = [:]
+    private let iconResolver = AppIconResolver()
     private var cancellables: Set<AnyCancellable> = []
 
     /// The focused monitor's workspaces resolved when the gesture began.
@@ -31,6 +32,10 @@ public final class SwipeController {
     /// Resolves while the fingers are still moving so the HUD can appear
     /// mid-gesture; the commit awaits it.
     private var ringTask: Task<Ring?, Never>?
+    /// Loads app icons concurrently with the ring and pushes them into the
+    /// HUD when ready — neither the HUD's appearance nor the commit waits
+    /// for the extra `list-windows` round trip or the icon disk probes.
+    private var iconTask: Task<Void, Never>?
     /// Serializes commits: the next gesture's ring fetch must observe the
     /// previous switch, or a quick second swipe would move from a stale
     /// workspace.
@@ -153,6 +158,25 @@ public final class SwipeController {
             }
             return ring
         }
+
+        // App icons load alongside the ring, off the main thread (cache
+        // misses probe Launch Services and the disk), and stream into the
+        // HUD whenever they arrive. Cancelling keeps a slow older load
+        // from overwriting a newer gesture's icons.
+        iconTask?.cancel()
+        guard preferences.showHUD else {
+            return
+        }
+        let resolver = iconResolver
+        iconTask = Task { [weak self] in
+            let icons = await Task.detached(priority: .userInitiated) { () -> [String: [NSImage]] in
+                Self.loadIcons(client: client, resolver: resolver)
+            }.value
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            hud.updateIcons(icons)
+        }
     }
 
     private func updateGesture(_ progress: Float) {
@@ -231,6 +255,24 @@ public final class SwipeController {
         } catch {
             fputs("AeroKit: swipe workspace listing failed: \(error)\n", stderr)
             return nil
+        }
+    }
+
+    /// Blocking CLI round trip plus icon resolution; runs detached. One
+    /// `list-windows --all` covers every workspace — icon-less cards are
+    /// better than serializing a call per workspace.
+    private nonisolated static func loadIcons(
+        client: AeroSpaceClient,
+        resolver: AppIconResolver
+    ) -> [String: [NSImage]] {
+        do {
+            return Dictionary(grouping: try client.listWindows(), by: \.workspace)
+                .mapValues { windows in
+                    WorkspaceApp.uniqueApps(from: windows).compactMap(resolver.icon(for:))
+                }
+        } catch {
+            fputs("AeroKit: swipe window listing failed: \(error)\n", stderr)
+            return [:]
         }
     }
 }

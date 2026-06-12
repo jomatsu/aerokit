@@ -4,7 +4,9 @@ public final class AppIconResolver: @unchecked Sendable {
     private let workspace: NSWorkspace
     /// Misses are cached too: unresolvable apps would otherwise rescan
     /// runningApplications and probe the filesystem on every rebuild.
+    /// Guarded by `lock` — resolvers are shared with detached tasks.
     private var cache: [String: NSImage?] = [:]
+    private let lock = NSLock()
 
     public init(workspace: NSWorkspace = .shared) {
         self.workspace = workspace
@@ -16,16 +18,24 @@ public final class AppIconResolver: @unchecked Sendable {
 
     public func icon(for app: WorkspaceApp) -> NSImage? {
         let cacheKey = app.bundleIdentifier ?? app.name
+        lock.lock()
         if let cached = cache[cacheKey] {
+            lock.unlock()
             return cached
         }
+        lock.unlock()
 
-        let icon = iconByBundleIdentifier(app.bundleIdentifier)
+        let resolved = iconByBundleIdentifier(app.bundleIdentifier)
             ?? iconByRunningApplicationName(app.name)
             ?? iconByApplicationPath(app.name)
 
+        // NSRunningApplication.icon can hand out a shared instance; resize
+        // a copy so other holders keep their size.
+        let icon = resolved?.copy() as? NSImage
         icon?.size = NSSize(width: 64, height: 64)
+        lock.lock()
         cache[cacheKey] = icon
+        lock.unlock()
         return icon
     }
 

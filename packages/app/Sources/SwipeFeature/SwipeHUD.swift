@@ -20,9 +20,11 @@ final class SwipeHUD {
     /// How long the strip stays up after a gesture settles.
     private static let displayDuration: Duration = .milliseconds(1000)
     /// Distance from the bottom edge of the screen's visible frame.
-    private static let bottomOffset: CGFloat = 96
-    /// Tall enough for a card grown to full emphasis plus its caption.
-    private static let stripHeight: CGFloat = 140
+    private static let bottomOffset: CGFloat = 80
+    /// Derived from the view's own metrics — panel, shadow room below,
+    /// a little headroom above — so window and layout can't drift apart.
+    private static let stripHeight: CGFloat =
+        SwipeHUDView.panelHeight + SwipeHUDView.bottomPadding + 8
 
     private let model = SwipeHUDModel()
     private var panel: NSPanel?
@@ -39,6 +41,12 @@ final class SwipeHUD {
         hideTask?.cancel()
         hideTask = nil
         present(workspaces: workspaces, current: current, previews: previews, wrapsAround: wrapsAround)
+    }
+
+    /// Icons arrive from their own load, possibly after the strip is
+    /// already up (or even settling) — the cards fill in as they land.
+    func updateIcons(_ icons: [String: [NSImage]]) {
+        model.icons = icons
     }
 
     /// Finger-attached selection position, in cards from the current one.
@@ -174,6 +182,10 @@ final class SwipeHUDModel: ObservableObject {
     @Published var workspaces: [String] = []
     @Published var current = ""
     @Published var previews: [String: NSImage] = [:]
+    /// Icons of the apps with windows on each workspace, in window order.
+    /// Updated independently of the rest: they stream in from their own
+    /// load (see SwipeHUD.updateIcons) and survive across updates.
+    @Published var icons: [String: [NSImage]] = [:]
     /// Selection displacement from `current`, in cards; follows the fingers
     /// during a gesture and springs back to 0 when it settles.
     @Published var offset: CGFloat = 0
@@ -237,7 +249,12 @@ final class SwipeHUDModel: ObservableObject {
         }
     }
 
-    private func apply(workspaces: [String], current: String, previews: [String: NSImage], wrapsAround: Bool) {
+    private func apply(
+        workspaces: [String],
+        current: String,
+        previews: [String: NSImage],
+        wrapsAround: Bool
+    ) {
         self.workspaces = workspaces
         self.current = current
         self.previews = previews
@@ -249,35 +266,62 @@ final class SwipeHUDModel: ObservableObject {
 
 // MARK: - View
 
-/// The workspace strip, styled after Mission Control's Spaces bar: a row of
-/// snapshot thumbnails on a dark glass panel. The selected thumbnail is
-/// larger — the layout itself makes room, nothing overlaps — and carries a
-/// white ring and a bright caption. Size, ring, and caption all interpolate
-/// continuously with the fingers' progress, so selection both reads at a
-/// glance and feels attached to the gesture.
+/// The workspace strip on a tight dark glass panel, Raycast-style: every
+/// thumbnail is the same size in a fixed row that never reflows, and the
+/// selection is a soft highlight pill that glides under the fingers'
+/// progress, with a white ring and caption brightness following it. App
+/// icons live on a dark gradient scrim along the snapshot's bottom edge —
+/// streaming-app card style — so they sit inside the picture without
+/// fighting it; the workspace name stays below as the cell's label.
 struct SwipeHUDView: View {
     @ObservedObject var model: SwipeHUDModel
 
-    private static let baseThumbSize = CGSize(width: 88, height: 55)
-    private static let selectedThumbSize = CGSize(width: 124, height: 77.5)
-    private static let cardSpacing: CGFloat = 14
-    private static let captionSpacing: CGFloat = 7
+    private static let thumbSize = CGSize(width: 140, height: 87.5)
+    private static let cellSpacing: CGFloat = 12
+    private static let captionSpacing: CGFloat = 6
     private static let captionHeight: CGFloat = 14
+    private static let cardCornerRadius: CGFloat = 8
+    private static let panelCornerRadius: CGFloat = 18
+    /// The scrim band along the thumbnail's bottom edge and the app icons
+    /// riding on it.
+    private static let scrimHeight: CGFloat = 34
+    private static let scrimIconSize: CGFloat = 18
+    private static let scrimIconSpacing: CGFloat = 4
+    private static let maxScrimIcons = 4
+    /// How far the highlight pill extends past the cell on every side.
+    private static let highlightInset: CGFloat = 6
+    /// How far past the row's ends the pill follows a rubber-banded
+    /// overshoot before it stops (the cards' emphasis keeps moving).
+    private static let highlightOverhang: CGFloat = 0.2
+    private static let panelPadding: CGFloat = 12
+    /// Room below the panel for its drop shadow.
+    static let bottomPadding: CGFloat = 20
+    private static var cellHeight: CGFloat {
+        thumbSize.height + captionSpacing + captionHeight
+    }
+    /// The glass panel's full height; the HUD window derives its frame
+    /// from this so the two can't drift apart.
+    static var panelHeight: CGFloat {
+        cellHeight + panelPadding * 2
+    }
 
     var body: some View {
         VStack {
             Spacer(minLength: 0)
+            // A gentle grow-in with a critically damped curve: enough life
+            // to feel responsive, but no overshoot — a springing scale
+            // makes the whole panel bob vertically on every appearance.
             strip
                 .opacity(model.isVisible ? 1 : 0)
-                .scaleEffect(model.isVisible ? 1 : 0.97)
+                .scaleEffect(model.isVisible ? 1 : 0.98)
                 .animation(
                     model.isVisible
-                        ? .spring(response: 0.28, dampingFraction: 0.85)
+                        ? .spring(response: 0.25, dampingFraction: 1)
                         : .easeOut(duration: 0.25),
                     value: model.isVisible
                 )
         }
-        .padding(.bottom, 4)
+        .padding(.bottom, Self.bottomPadding)
         .frame(maxWidth: .infinity)
     }
 
@@ -287,92 +331,154 @@ struct SwipeHUDView: View {
         model.selectionPosition
     }
 
-    /// The one card currently rendered as selected.
-    private var selectedIndex: Int {
-        let upperBound = max(model.workspaces.count - 1, 0)
-        return min(max(Int(selectionPosition.rounded()), 0), upperBound)
-    }
-
     /// 1 when the selection sits on this card, fading to 0 one card away;
-    /// drives the size, ring, and caption interpolation.
+    /// drives the ring, veil, and caption interpolation.
     private func emphasis(at index: Int) -> CGFloat {
-        max(0, 1 - min(1, abs(selectionPosition - CGFloat(index))))
+        max(0, 1 - abs(selectionPosition - CGFloat(index)))
     }
 
     private var strip: some View {
-        HStack(alignment: .bottom, spacing: Self.cardSpacing) {
+        // The pill is a background, not a sibling: it must never take part
+        // in layout — taller than the row, it would pad the strip's bottom
+        // with dead space.
+        HStack(spacing: Self.cellSpacing) {
             ForEach(Array(model.workspaces.enumerated()), id: \.element) { index, name in
                 card(for: name, at: index)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 14)
-        .padding(.bottom, 12)
+        .background(alignment: .topLeading) {
+            selectionHighlight
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, Self.panelPadding)
         .background {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.black.opacity(0.55))
+            RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
+                .fill(.black.opacity(0.5))
                 .background {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
                         .fill(.ultraThinMaterial)
                 }
                 .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(.white.opacity(0.09), lineWidth: 1)
+                    // Raycast-style edge: bright at the top where the light
+                    // hits, falling off toward the bottom.
+                    RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [.white.opacity(0.22), .white.opacity(0.05)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 1
+                        )
                 }
-                .shadow(color: .black.opacity(0.5), radius: 28, y: 12)
+                // Soft and close — a heavy halo reads as smudges sticking
+                // out past the panel's sides.
+                .shadow(color: .black.opacity(0.28), radius: 14, y: 6)
         }
+    }
+
+    /// The gliding selection: a soft pill that tracks the fingers'
+    /// position continuously, clamped near the row so a rubber-banded
+    /// overshoot can't drag it out of the panel.
+    private var selectionHighlight: some View {
+        let upperBound = CGFloat(max(model.workspaces.count - 1, 0))
+        let position = min(
+            max(selectionPosition, -Self.highlightOverhang),
+            upperBound + Self.highlightOverhang
+        )
+        return RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(.white.opacity(0.12))
+            .frame(
+                width: Self.thumbSize.width + Self.highlightInset * 2,
+                height: Self.cellHeight + Self.highlightInset * 2
+            )
+            .offset(
+                x: (Self.thumbSize.width + Self.cellSpacing) * position - Self.highlightInset,
+                y: -Self.highlightInset
+            )
     }
 
     private func card(for name: String, at index: Int) -> some View {
         let emphasis = emphasis(at: index)
-        let isSelected = index == selectedIndex
-        let size = CGSize(
-            width: Self.baseThumbSize.width
-                + (Self.selectedThumbSize.width - Self.baseThumbSize.width) * emphasis,
-            height: Self.baseThumbSize.height
-                + (Self.selectedThumbSize.height - Self.baseThumbSize.height) * emphasis
-        )
+        // Constant fonts and frames: only colors animate, so the captions
+        // never shift or wobble.
         return VStack(spacing: Self.captionSpacing) {
-            preview(for: name, size: size, emphasis: emphasis)
+            thumbnail(for: name, emphasis: emphasis)
             Text(name)
-                .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
-                .foregroundStyle(.white.opacity(0.4 + 0.55 * emphasis))
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.5 + 0.5 * emphasis))
                 .lineLimit(1)
-                .frame(height: Self.captionHeight)
+                .frame(width: Self.thumbSize.width, height: Self.captionHeight)
         }
     }
 
-    private func preview(for name: String, size: CGSize, emphasis: CGFloat) -> some View {
-        ZStack {
+    /// The full snapshot card: picture, icon scrim, dimming veil,
+    /// hairline, and selection ring.
+    private func thumbnail(for name: String, emphasis: CGFloat) -> some View {
+        let icons = model.icons[name] ?? []
+        return ZStack {
             if let image = model.previews[name] {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
                 Rectangle()
-                    .fill(.white.opacity(0.06))
+                    .fill(.white.opacity(0.07))
                 Image(systemName: "macwindow")
                     .font(.system(size: 15, weight: .light))
-                    .foregroundStyle(.white.opacity(0.22))
+                    .foregroundStyle(.white.opacity(0.28))
             }
         }
-        .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        // The dark veil lifts as the card grows, instead of a flat dimming.
+        .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
+        .clipShape(RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous))
+        // Streaming-card scrim: a dark gradient band along the bottom edge
+        // that carries the app icons, so they read against any snapshot
+        // without floating loose on it. Filled into the card's shape so the
+        // rounded corners stay clean.
         .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(.black.opacity(0.3 * (1 - emphasis)))
+            if !icons.isEmpty {
+                RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black.opacity(0.65), location: 0),
+                                .init(color: .clear, location: Self.scrimHeight / Self.thumbSize.height),
+                            ],
+                            startPoint: .bottom,
+                            endPoint: .top
+                        )
+                    )
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
+            HStack(spacing: Self.scrimIconSpacing) {
+                ForEach(0..<min(icons.count, Self.maxScrimIcons), id: \.self) { index in
+                    Image(nsImage: icons[index])
+                        .resizable()
+                        .frame(width: Self.scrimIconSize, height: Self.scrimIconSize)
+                }
+            }
+            .padding(6)
+            .opacity(0.8 + 0.2 * emphasis)
+            .saturation(0.8 + 0.2 * emphasis)
+        }
+        // The dark veil lifts as the selection arrives, so the hierarchy
+        // comes from brightness instead of size.
+        .overlay {
+            RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                .fill(.black.opacity(0.32 * (1 - emphasis)))
         }
         .overlay {
             // Hairline edge every card has, so thumbnails never bleed into
             // the panel…
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         }
         .overlay {
             // …and the selection ring that fades in over it.
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(.white.opacity(0.9 * emphasis), lineWidth: 2)
+            RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                .strokeBorder(.white.opacity(0.9 * emphasis), lineWidth: 1.5)
         }
         .shadow(color: .black.opacity(0.35 * emphasis), radius: 10, y: 4)
     }

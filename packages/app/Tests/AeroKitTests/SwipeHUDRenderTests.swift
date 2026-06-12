@@ -17,19 +17,32 @@ final class SwipeHUDRenderTests: XCTestCase {
             workspaces: workspaces,
             current: "2",
             previews: [
-                "1": Self.fakeScreenshot(hue: 0.58),
-                "2": Self.fakeScreenshot(hue: 0.08),
-                "3": Self.fakeScreenshot(hue: 0.33),
-                "browser": Self.fakeScreenshot(hue: 0.75),
+                "1": HUDRenderMocks.fakeScreenshot(hue: 0.58),
+                "2": HUDRenderMocks.fakeScreenshot(hue: 0.08),
+                "3": HUDRenderMocks.fakeScreenshot(hue: 0.33),
+                "browser": HUDRenderMocks.fakeScreenshot(hue: 0.75),
             ],
             wrapsAround: false,
             animated: false
         )
+        // Icons stream in separately in production (SwipeHUD.updateIcons),
+        // so the model takes them as a plain assignment.
+        model.icons = [
+            "1": [HUDRenderMocks.fakeIcon(hue: 0.6), HUDRenderMocks.fakeIcon(hue: 0.95)],
+            "2": [
+                HUDRenderMocks.fakeIcon(hue: 0.1),
+                HUDRenderMocks.fakeIcon(hue: 0.5),
+                HUDRenderMocks.fakeIcon(hue: 0.8),
+            ],
+            "3": [HUDRenderMocks.fakeIcon(hue: 0.3)],
+            "code": [HUDRenderMocks.fakeIcon(hue: 0.55), HUDRenderMocks.fakeIcon(hue: 0.0)],
+        ]
         model.isVisible = true
 
         render(model: model, offset: 0, name: "rest")
         render(model: model, offset: 0.5, name: "mid")
         render(model: model, offset: 1.4, name: "drag")
+        render(model: model, offset: -1, name: "edge")
     }
 
     private func render(model: SwipeHUDModel, offset: CGFloat, name: String) {
@@ -39,31 +52,11 @@ final class SwipeHUDRenderTests: XCTestCase {
             .background(Color(white: 0.35))
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2
-        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let png = bitmap.representation(using: .png, properties: [:])
+        guard let image = renderer.nsImage,
+              HUDRenderMocks.writePNG(image, to: "/tmp/aerokit-hud-\(name).png")
         else {
             XCTFail("render failed")
             return
         }
-        try? png.write(to: URL(fileURLWithPath: "/tmp/aerokit-hud-\(name).png"))
-    }
-
-    /// Gradient stand-in for a workspace snapshot.
-    private static func fakeScreenshot(hue: CGFloat) -> NSImage {
-        let size = NSSize(width: 320, height: 200)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        let gradient = NSGradient(
-            starting: NSColor(hue: hue, saturation: 0.55, brightness: 0.85, alpha: 1),
-            ending: NSColor(hue: hue, saturation: 0.7, brightness: 0.35, alpha: 1)
-        )
-        gradient?.draw(in: NSRect(origin: .zero, size: size), angle: -60)
-        NSColor.white.withAlphaComponent(0.85).setFill()
-        NSRect(x: 30, y: 40, width: 180, height: 120).fill()
-        NSColor.white.withAlphaComponent(0.6).setFill()
-        NSRect(x: 170, y: 20, width: 120, height: 90).fill()
-        image.unlockFocus()
-        return image
     }
 }
