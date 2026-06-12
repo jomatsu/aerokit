@@ -56,6 +56,13 @@ public final class ExposePreferences: ObservableObject {
         didSet { defaults.set(showGroupToggleHint, forKey: Keys.showGroupToggleHint) }
     }
 
+    /// Three-finger trackpad swipes: up opens the workspace overview, down
+    /// opens app exposé — standing in for the system Mission Control and
+    /// App Exposé gestures.
+    @Published public var threeFingerSwipe: Bool {
+        didSet { defaults.set(threeFingerSwipe, forKey: Keys.threeFingerSwipe) }
+    }
+
     private let defaults: UserDefaults
 
     private enum Keys {
@@ -65,6 +72,7 @@ public final class ExposePreferences: ObservableObject {
         static let groupByApp = "expose.groupByApp"
         static let groupToggleKey = "expose.groupToggleKey"
         static let showGroupToggleHint = "expose.showGroupToggleHint"
+        static let threeFingerSwipe = "expose.threeFingerSwipe"
     }
 
     public init(defaults: UserDefaults = .standard) {
@@ -76,5 +84,6 @@ public final class ExposePreferences: ObservableObject {
         let storedToggleKey = defaults.string(forKey: Keys.groupToggleKey)?.uppercased().first
         groupToggleKey = storedToggleKey.map(String.init) ?? "0"
         showGroupToggleHint = defaults.object(forKey: Keys.showGroupToggleHint) as? Bool ?? true
+        threeFingerSwipe = defaults.object(forKey: Keys.threeFingerSwipe) as? Bool ?? true
     }
 }

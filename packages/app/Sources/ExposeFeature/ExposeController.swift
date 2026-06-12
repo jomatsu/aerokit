@@ -25,6 +25,7 @@ public final class ExposeController {
     private let settingsModel = ExposeSettingsModel()
     private let overlay = ExposeOverlay()
     private let digitInterceptor = ExposeDigitInterceptor()
+    private let swipeMonitor = TrackpadSwipeMonitor()
 
     private var session: ExposeSession?
     /// Scope of the most recent presentation request; kept even when the
@@ -65,7 +66,12 @@ public final class ExposeController {
             }
         }
 
+        swipeMonitor.onSwipe = { [weak self] direction in
+            self?.handleSwipe(direction)
+        }
+
         registerHotKeys()
+        updateSwipeMonitor(enabled: preferences.threeFingerSwipe)
         observePreferences()
     }
 
@@ -137,6 +143,9 @@ public final class ExposeController {
             .store(in: &cancellables)
         preferences.$groupToggleKey.dropFirst()
             .sink { [weak self] key in self?.overlay.groupToggleKey = key.first ?? "0" }
+            .store(in: &cancellables)
+        preferences.$threeFingerSwipe.dropFirst()
+            .sink { [weak self] enabled in self?.updateSwipeMonitor(enabled: enabled) }
             .store(in: &cancellables)
     }
 
@@ -433,5 +442,43 @@ public final class ExposeController {
         captureTask = nil
         overlay.hide()
         session = nil
+    }
+}
+
+// MARK: - Trackpad swipes
+
+extension ExposeController {
+    /// Mirrors the system gestures: swipe up opens (or switches to) the
+    /// workspace overview, swipe down opens app exposé when nothing is
+    /// shown and otherwise closes whatever is open.
+    private func handleSwipe(_ direction: TrackpadSwipeMonitor.Direction) {
+        let isActive = overlay.isVisible || presentTask != nil
+        switch direction {
+        case .up:
+            guard !(isActive && requestedScope == .workspace) else {
+                return
+            }
+            toggle(scope: .workspace)
+        case .down:
+            if isActive {
+                dismiss()
+            } else {
+                toggle(scope: .app)
+            }
+        }
+    }
+
+    private func updateSwipeMonitor(enabled: Bool) {
+        guard enabled else {
+            swipeMonitor.stop()
+            settingsModel.swipeErrorMessage = nil
+            return
+        }
+        if swipeMonitor.start() {
+            settingsModel.swipeErrorMessage = nil
+        } else {
+            fputs("AeroKit: trackpad swipe monitor failed to start\n", stderr)
+            settingsModel.swipeErrorMessage = "Could not access the trackpad for three-finger swipes."
+        }
     }
 }

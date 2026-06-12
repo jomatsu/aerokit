@@ -10,6 +10,7 @@ struct ExposeSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             shortcutsSection
+            trackpadSection
 
             if let message = model.hotKeyErrorMessage {
                 SettingsErrorBanner(message)
@@ -17,6 +18,24 @@ struct ExposeSettingsView: View {
 
             if let message = model.appHotKeyErrorMessage {
                 SettingsErrorBanner(message)
+            }
+
+            if let message = model.swipeErrorMessage {
+                SettingsErrorBanner(message)
+            }
+
+            if let message = model.systemGestureErrorMessage {
+                SettingsErrorBanner(message)
+            }
+
+            if preferences.threeFingerSwipe, model.systemGesturesEnabled {
+                SettingsErrorBanner(
+                    "The system Mission Control gestures are also on, so both will react to three-finger swipes.",
+                    icon: "hand.draw.fill",
+                    actionTitle: "Turn Off\u{2026}"
+                ) {
+                    model.setSystemGestures(false)
+                }
             }
 
             if preferences.modifierQuickSelect, !accessibilityGranted {
@@ -40,10 +59,34 @@ struct ExposeSettingsView: View {
         }
         .onAppear {
             accessibilityGranted = AccessibilityPermission.isGranted
+            model.refreshSystemGestures()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            // Coming back from System Settings after granting access.
+            // Coming back from System Settings after granting access or
+            // flipping the gesture checkboxes there.
             accessibilityGranted = AccessibilityPermission.isGranted
+            model.refreshSystemGestures()
+        }
+    }
+
+    private var trackpadSection: some View {
+        SettingsSection("Trackpad") {
+            SettingsRow(
+                title: "Three-finger swipe",
+                subtitle: "Swipe up for overview, down for app windows"
+            ) {
+                SettingsToggle(isOn: $preferences.threeFingerSwipe)
+            }
+            SettingsDivider()
+            SettingsRow(
+                title: "System swipe gestures",
+                subtitle: "macOS Mission Control & App Exposé on three-finger swipe \u{B7} changing restarts the Dock"
+            ) {
+                SettingsToggle(isOn: Binding(
+                    get: { model.systemGesturesEnabled },
+                    set: { model.setSystemGestures($0) }
+                ))
+            }
         }
     }
 
@@ -104,8 +147,42 @@ struct ExposeSettingsView: View {
 final class ExposeSettingsModel: ObservableObject {
     @Published var hotKeyErrorMessage: String?
     @Published var appHotKeyErrorMessage: String?
+    @Published var swipeErrorMessage: String?
+    @Published var systemGestureErrorMessage: String?
+
+    /// Mirror of the macOS Mission Control / App Exposé gesture checkboxes;
+    /// refreshed whenever the pane (re)appears because System Settings can
+    /// change them behind our back.
+    @Published var systemGesturesEnabled = SystemSwipeGestures.isEnabled
 
     var onHotKeyRecordingChanged: ((Bool) -> Void)?
+
+    /// Chained so rapid toggling cannot interleave two write-and-restart
+    /// sequences and leave the system disagreeing with the toggle.
+    private var systemGestureWrite: Task<Void, Never>?
+
+    func refreshSystemGestures() {
+        systemGesturesEnabled = SystemSwipeGestures.isEnabled
+    }
+
+    /// Optimistically flips the toggle, then writes the Dock preferences
+    /// and restarts the Dock off-main; a failure resyncs from the system.
+    func setSystemGestures(_ enabled: Bool) {
+        systemGesturesEnabled = enabled
+        systemGestureErrorMessage = nil
+        systemGestureWrite = Task.detached(priority: .userInitiated) { [previousWrite = systemGestureWrite] in
+            await previousWrite?.value
+            do {
+                try SystemSwipeGestures.setEnabled(enabled)
+            } catch {
+                fputs("AeroKit: updating system swipe gestures failed: \(error)\n", stderr)
+                await MainActor.run {
+                    self.systemGestureErrorMessage = "Could not change the system swipe gestures."
+                    self.refreshSystemGestures()
+                }
+            }
+        }
+    }
 
     /// Counted because the pane has one recorder per hotkey and the user can
     /// start the second before finishing the first; the global triggers must
