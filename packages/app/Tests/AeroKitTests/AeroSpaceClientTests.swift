@@ -41,6 +41,36 @@ final class AeroSpaceClientTests: XCTestCase {
         XCTAssertTrue(try client.listWorkspaces().isEmpty)
     }
 
+    // MARK: - workspacesOnFocusedMonitor
+
+    func testWorkspacesOnFocusedMonitorParsesNamesAndFocus() throws {
+        let runner = StubRunner(output: """
+        1\(us)false
+        2\(us)true
+        """)
+        let client = AeroSpaceClient(executablePath: "/usr/bin/true", runner: runner)
+
+        let workspaces = try client.workspacesOnFocusedMonitor(includeEmpty: true)
+
+        XCTAssertEqual(workspaces.map(\.name), ["1", "2"])
+        XCTAssertEqual(workspaces.map(\.isFocused), [false, true])
+        let invocation = try XCTUnwrap(runner.invocations.first)
+        XCTAssertEqual(invocation.arguments.prefix(4), ["list-workspaces", "--monitor", "focused", "--format"])
+    }
+
+    func testWorkspacesOnFocusedMonitorExcludesEmptyOnRequest() throws {
+        let runner = StubRunner(output: "")
+        let client = AeroSpaceClient(executablePath: "/usr/bin/true", runner: runner)
+
+        _ = try client.workspacesOnFocusedMonitor(includeEmpty: false)
+
+        let invocation = try XCTUnwrap(runner.invocations.first)
+        XCTAssertEqual(
+            invocation.arguments.prefix(6),
+            ["list-workspaces", "--monitor", "focused", "--empty", "no", "--format"]
+        )
+    }
+
     // MARK: - listWindows
 
     func testListWindowsParsesAllFields() throws {

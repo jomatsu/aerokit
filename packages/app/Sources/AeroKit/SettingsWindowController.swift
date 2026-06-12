@@ -18,12 +18,18 @@ final class SettingsWindowController {
     /// lifetime, and a nonisolated deinit could not touch it anyway.
     private var activationObserver: (any NSObjectProtocol)?
 
-    init(switcherPane: some View, exposePane: some View, onWillShow: @escaping () -> Void) {
+    init(
+        switcherPane: some View,
+        exposePane: some View,
+        swipePane: some View,
+        onWillShow: @escaping () -> Void
+    ) {
         let general = GeneralSettingsModel()
         content = AeroKitSettingsView(
             generalModel: general,
             switcherPane: AnyView(switcherPane),
-            exposePane: AnyView(exposePane)
+            exposePane: AnyView(exposePane),
+            swipePane: AnyView(swipePane)
         )
         self.onWillShow = onWillShow
 
@@ -77,6 +83,7 @@ struct AeroKitSettingsView: View {
     @ObservedObject var generalModel: GeneralSettingsModel
     let switcherPane: AnyView
     let exposePane: AnyView
+    let swipePane: AnyView
 
     @State private var selectedTab = Tab.general
 
@@ -84,12 +91,14 @@ struct AeroKitSettingsView: View {
         case general = "General"
         case switcher = "Switcher"
         case expose = "Exposé"
+        case swipe = "Swipe"
 
         var icon: String {
             switch self {
             case .general: "gearshape"
             case .switcher: "rectangle.3.group"
             case .expose: "square.grid.2x2"
+            case .swipe: "hand.draw"
             }
         }
     }
@@ -118,6 +127,8 @@ struct AeroKitSettingsView: View {
             switcherPane
         case .expose:
             exposePane
+        case .swipe:
+            swipePane
         }
     }
 

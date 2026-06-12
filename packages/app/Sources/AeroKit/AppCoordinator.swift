@@ -2,11 +2,12 @@ import AeroKitCore
 import AppKit
 import ExposeFeature
 import Foundation
+import SwipeFeature
 import SwitcherFeature
 
 /// Owns the pieces every feature shares — the Carbon hotkey center, the
-/// status bar item, and the settings window — and routes events to the
-/// switcher and exposé controllers.
+/// status bar item, the trackpad monitor, and the settings window — and
+/// routes events to the switcher, exposé, and swipe controllers.
 @MainActor
 final class AppCoordinator {
     private let hotKeyCenter = HotKeyCenter()
@@ -14,6 +15,10 @@ final class AppCoordinator {
     private let client: AeroSpaceClient
     private let switcher: SwitcherController
     private let expose: ExposeController
+    private let swipe: SwipeController
+    /// Shared because only one monitor can observe the trackpad: vertical
+    /// swipes go to exposé, horizontal ones to the workspace switcher.
+    private let swipeMonitor = TrackpadSwipeMonitor()
     private var settingsWindow: SettingsWindowController?
     private var settingsSummonTask: Task<Void, Never>?
 
@@ -23,6 +28,7 @@ final class AppCoordinator {
         client = AeroSpaceClient(executablePath: AeroSpaceClient.detectExecutablePath())
         switcher = SwitcherController(hotKeyCenter: hotKeyCenter)
         expose = ExposeController(client: client, hotKeyCenter: hotKeyCenter)
+        swipe = SwipeController(client: client)
     }
 
     func start() {
@@ -43,13 +49,46 @@ final class AppCoordinator {
 
         switcher.start()
         expose.start()
+        swipe.start()
+
+        swipeMonitor.onSwipe = { [weak self] direction in
+            fputs("AeroKit[debug]: swipe \(direction)\n", stderr)
+            switch direction {
+            case .up, .down:
+                self?.expose.handleSwipe(direction)
+            case .left, .right:
+                self?.swipe.handleSwipe(direction)
+            }
+        }
+        expose.onSwipePreferenceChanged = { [weak self] in self?.updateSwipeMonitor() }
+        swipe.onSwipePreferenceChanged = { [weak self] in self?.updateSwipeMonitor() }
+        updateSwipeMonitor()
+    }
+
+    /// The monitor runs while any feature wants trackpad swipes and stops
+    /// when none does, so the private framework is only touched when needed.
+    private func updateSwipeMonitor() {
+        let wanted = expose.wantsSwipeGestures || swipe.wantsSwipeGestures
+        var running = false
+        if wanted {
+            running = swipeMonitor.start()
+            fputs("AeroKit[debug]: swipe monitor start -> \(running)\n", stderr)
+            if !running {
+                fputs("AeroKit: trackpad swipe monitor failed to start\n", stderr)
+            }
+        } else {
+            swipeMonitor.stop()
+        }
+        expose.updateSwipeAvailability(monitorRunning: running || !wanted)
+        swipe.updateSwipeAvailability(monitorRunning: running || !wanted)
     }
 
     func showSettings() {
         if settingsWindow == nil {
             settingsWindow = SettingsWindowController(
                 switcherPane: switcher.makeSettingsPane(),
-                exposePane: expose.makeSettingsPane()
+                exposePane: expose.makeSettingsPane(),
+                swipePane: swipe.makeSettingsPane()
             ) { [weak self] in
                 self?.switcher.refreshSettingsStatus()
             }

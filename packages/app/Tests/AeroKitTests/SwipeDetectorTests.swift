@@ -85,8 +85,31 @@ final class SwipeDetectorTests: XCTestCase {
         XCTAssertNil(frame(fingers: threeFingers(atY: 0.6), state: 2))
     }
 
-    func testMostlyHorizontalMovementDoesNotFire() {
+    private func threeFingers(atX center: Float) -> [(x: Float, y: Float)] {
+        [(center - 0.2, 0.5), (center, 0.5), (center + 0.2, 0.5)]
+    }
+
+    func testThreeFingerSwipeRightFiresOnce() {
+        XCTAssertNil(frame(fingers: threeFingers(atX: 0.3)))
+        XCTAssertNil(frame(fingers: threeFingers(atX: 0.35)))
+        XCTAssertEqual(frame(fingers: threeFingers(atX: 0.5)), .right)
+        // Continuing the same gesture must not fire again.
+        XCTAssertNil(frame(fingers: threeFingers(atX: 0.7)))
+    }
+
+    func testThreeFingerSwipeLeftFires() {
+        XCTAssertNil(frame(fingers: threeFingers(atX: 0.6)))
+        XCTAssertEqual(frame(fingers: threeFingers(atX: 0.4)), .left)
+    }
+
+    func testMostlyHorizontalMovementFiresHorizontally() {
         XCTAssertNil(frame(fingers: [(0.2, 0.5), (0.3, 0.5), (0.4, 0.5)]))
-        XCTAssertNil(frame(fingers: [(0.5, 0.55), (0.6, 0.55), (0.7, 0.55)]))
+        XCTAssertEqual(frame(fingers: [(0.5, 0.55), (0.6, 0.55), (0.7, 0.55)]), .right)
+    }
+
+    func testDominantVerticalAxisWinsOverHorizontalDrift() {
+        XCTAssertNil(frame(fingers: threeFingers(atY: 0.3)))
+        // Both axes moved, the vertical one further.
+        XCTAssertEqual(frame(fingers: [(0.38, 0.5), (0.58, 0.5), (0.78, 0.5)]), .up)
     }
 }

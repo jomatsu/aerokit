@@ -29,14 +29,19 @@ let package = Package(
             dependencies: ["AeroKitCore"],
             swiftSettings: swiftSettings
         ),
+        .target(
+            name: "SwipeFeature",
+            dependencies: ["AeroKitCore"],
+            swiftSettings: swiftSettings
+        ),
         .executableTarget(
             name: "AeroKit",
-            dependencies: ["AeroKitCore", "SwitcherFeature", "ExposeFeature"],
+            dependencies: ["AeroKitCore", "SwitcherFeature", "ExposeFeature", "SwipeFeature"],
             swiftSettings: swiftSettings
         ),
         .testTarget(
             name: "AeroKitTests",
-            dependencies: ["AeroKitCore", "SwitcherFeature", "ExposeFeature"]
+            dependencies: ["AeroKitCore", "SwitcherFeature", "ExposeFeature", "SwipeFeature"]
         )
     ]
 )

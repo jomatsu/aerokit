@@ -47,6 +47,16 @@ workspace in one grid. Activating a window on another workspace switches
 there. Pressing one overview's hotkey while the other is open switches
 scopes, like Mission Control vs App Exposé.
 
+### Swipe (three-finger trackpad swipe)
+
+Swipe left or right with three fingers to switch between the focused
+monitor's AeroSpace workspaces. A Raycast-style workspace strip briefly
+appears at the bottom of the screen with the focused workspace
+highlighted; consecutive swipes glide the highlight along the strip.
+Natural direction (content follows the fingers), wrap-around, skipping
+empty workspaces, and the strip itself are all configurable. Three-finger
+swipes up/down still belong to Exposé.
+
 All hotkeys are configurable from the settings window (menu bar icon →
 Settings).
 
@@ -82,6 +92,8 @@ Sources/
                    limit), permissions, login item, settings UI primitives
   SwitcherFeature  workspace switcher: overlay, snapshot engine & scheduler
   ExposeFeature    window overview: overlay, grid layout, live previews
+  SwipeFeature     trackpad workspace switching: swipe → workspace ring
+                   navigation, workspace strip HUD
   AeroKit          app shell: status bar, unified settings window, hotkey
                    dispatch, preference migration
 ```

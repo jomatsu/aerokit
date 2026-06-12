@@ -25,7 +25,6 @@ public final class ExposeController {
     private let settingsModel = ExposeSettingsModel()
     private let overlay = ExposeOverlay()
     private let digitInterceptor = ExposeDigitInterceptor()
-    private let swipeMonitor = TrackpadSwipeMonitor()
 
     private var session: ExposeSession?
     /// Scope of the most recent presentation request; kept even when the
@@ -38,6 +37,14 @@ public final class ExposeController {
     private var presentEpoch = 0
     private var warnedAccessibilityMissing = false
     private var cancellables: Set<AnyCancellable> = []
+
+    /// The coordinator owns the shared trackpad monitor (only one can watch
+    /// the pad) and re-evaluates it whenever this fires.
+    public var onSwipePreferenceChanged: (() -> Void)?
+
+    public var wantsSwipeGestures: Bool {
+        preferences.threeFingerSwipe
+    }
 
     public init(client: AeroSpaceClient, hotKeyCenter: HotKeyCenter) {
         self.client = client
@@ -66,12 +73,7 @@ public final class ExposeController {
             }
         }
 
-        swipeMonitor.onSwipe = { [weak self] direction in
-            self?.handleSwipe(direction)
-        }
-
         registerHotKeys()
-        updateSwipeMonitor(enabled: preferences.threeFingerSwipe)
         observePreferences()
     }
 
@@ -145,7 +147,7 @@ public final class ExposeController {
             .sink { [weak self] key in self?.overlay.groupToggleKey = key.first ?? "0" }
             .store(in: &cancellables)
         preferences.$threeFingerSwipe.dropFirst()
-            .sink { [weak self] enabled in self?.updateSwipeMonitor(enabled: enabled) }
+            .sink { [weak self] _ in self?.onSwipePreferenceChanged?() }
             .store(in: &cancellables)
     }
 
@@ -450,8 +452,12 @@ public final class ExposeController {
 extension ExposeController {
     /// Mirrors the system gestures: swipe up opens (or switches to) the
     /// workspace overview, swipe down opens app exposé when nothing is
-    /// shown and otherwise closes whatever is open.
-    private func handleSwipe(_ direction: TrackpadSwipeMonitor.Direction) {
+    /// shown and otherwise closes whatever is open. Horizontal swipes
+    /// belong to the workspace switcher and are ignored here.
+    public func handleSwipe(_ direction: TrackpadSwipeMonitor.Direction) {
+        guard preferences.threeFingerSwipe else {
+            return
+        }
         let isActive = overlay.isVisible || presentTask != nil
         switch direction {
         case .up:
@@ -465,20 +471,16 @@ extension ExposeController {
             } else {
                 toggle(scope: .app)
             }
+        case .left, .right:
+            break
         }
     }
 
-    private func updateSwipeMonitor(enabled: Bool) {
-        guard enabled else {
-            swipeMonitor.stop()
-            settingsModel.swipeErrorMessage = nil
-            return
-        }
-        if swipeMonitor.start() {
-            settingsModel.swipeErrorMessage = nil
-        } else {
-            fputs("AeroKit: trackpad swipe monitor failed to start\n", stderr)
-            settingsModel.swipeErrorMessage = "Could not access the trackpad for three-finger swipes."
-        }
+    /// Reflects the shared monitor's state in this feature's settings pane.
+    public func updateSwipeAvailability(monitorRunning: Bool) {
+        settingsModel.swipeErrorMessage = TrackpadSwipeMonitor.unavailableMessage(
+            gestureEnabled: preferences.threeFingerSwipe,
+            monitorRunning: monitorRunning
+        )
     }
 }

@@ -12,6 +12,8 @@ public final class TrackpadSwipeMonitor {
     public enum Direction: Sendable {
         case up
         case down
+        case left
+        case right
     }
 
     /// Called on the main actor whenever a three-finger swipe crosses the
@@ -19,6 +21,15 @@ public final class TrackpadSwipeMonitor {
     public var onSwipe: ((Direction) -> Void)?
 
     public private(set) var isRunning = false
+
+    /// Settings-pane message for a feature whose swipe gesture is enabled
+    /// while the shared monitor could not start; nil when there is nothing
+    /// to report. Shared so the wording cannot drift between features.
+    public static func unavailableMessage(gestureEnabled: Bool, monitorRunning: Bool) -> String? {
+        gestureEnabled && !monitorRunning
+            ? "Could not access the trackpad for three-finger swipes."
+            : nil
+    }
 
     /// Routes the C callback — which cannot capture context — back to the
     /// monitor that registered it. Lock-protected because start()/stop()
@@ -268,11 +279,18 @@ final class SwipeDetector: @unchecked Sendable {
         }
         let deltaX = averageX - startX
         let deltaY = averageY - startY
-        guard abs(deltaY) >= Self.threshold, abs(deltaY) > abs(deltaX) else {
-            return nil
+        // The dominant axis decides the direction so a diagonal drift never
+        // fires both a workspace switch and an overlay toggle.
+        if abs(deltaY) >= Self.threshold, abs(deltaY) > abs(deltaX) {
+            hasFired = true
+            // Normalized y grows toward the top edge of the pad.
+            return deltaY > 0 ? .up : .down
         }
-        hasFired = true
-        // Normalized y grows toward the top edge of the pad.
-        return deltaY > 0 ? .up : .down
+        if abs(deltaX) >= Self.threshold, abs(deltaX) > abs(deltaY) {
+            hasFired = true
+            // Normalized x grows toward the right edge of the pad.
+            return deltaX > 0 ? .right : .left
+        }
+        return nil
     }
 }

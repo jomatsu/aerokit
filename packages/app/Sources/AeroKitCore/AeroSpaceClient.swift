@@ -64,7 +64,22 @@ public final class AeroSpaceClient: Sendable {
     // MARK: - Workspaces
 
     public func listWorkspaces() throws -> [(name: String, isFocused: Bool)] {
-        try runFields(["list-workspaces", "--all"], format: ["%{workspace}", "%{workspace-is-focused}"])
+        try workspaceList(["list-workspaces", "--all"])
+    }
+
+    /// Workspaces of the focused monitor in AeroSpace's order. With
+    /// `includeEmpty: false` the focused workspace itself can be missing
+    /// from the result when it has no windows.
+    public func workspacesOnFocusedMonitor(includeEmpty: Bool) throws -> [(name: String, isFocused: Bool)] {
+        var arguments = ["list-workspaces", "--monitor", "focused"]
+        if !includeEmpty {
+            arguments += ["--empty", "no"]
+        }
+        return try workspaceList(arguments)
+    }
+
+    private func workspaceList(_ arguments: [String]) throws -> [(name: String, isFocused: Bool)] {
+        try runFields(arguments, format: ["%{workspace}", "%{workspace-is-focused}"])
             .compactMap { fields in
                 guard fields.count >= 2, !fields[0].isEmpty else {
                     return nil
