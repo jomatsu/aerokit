@@ -90,6 +90,12 @@ public final class SwitcherController {
         settingsModel.refreshStatus()
     }
 
+    /// Cached overview snapshot for other features' previews (the swipe HUD
+    /// thumbnails); nil when the workspace was never captured.
+    public func snapshotImage(for workspace: String) -> NSImage? {
+        snapshotStore.snapshotImage(for: workspace)
+    }
+
     /// Status-bar menu entry point: open settings and kick off a refresh so
     /// its progress is visible.
     public func refreshSnapshotsFromMenu() {

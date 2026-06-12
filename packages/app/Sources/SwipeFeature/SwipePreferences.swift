@@ -1,3 +1,4 @@
+import AeroKitCore
 import Combine
 import Foundation
 
@@ -29,6 +30,14 @@ public final class SwipePreferences: ObservableObject {
         didSet { defaults.set(showHUD, forKey: Keys.showHUD) }
     }
 
+    /// Finger travel in millimeters worth one workspace step.
+    @Published public var stepDistanceMM: Double {
+        didSet { defaults.set(stepDistanceMM, forKey: Keys.stepDistance) }
+    }
+
+    public static let stepDistanceRange: ClosedRange<Double> = 20 ... 80
+    public static let defaultStepDistanceMM = Double(TrackpadSwipeMonitor.defaultStepDistanceMM)
+
     private let defaults: UserDefaults
 
     private enum Keys {
@@ -37,6 +46,7 @@ public final class SwipePreferences: ObservableObject {
         static let wrapAround = "swipe.wrapAround"
         static let skipEmpty = "swipe.skipEmpty"
         static let showHUD = "swipe.showHUD"
+        static let stepDistance = "swipe.stepDistanceMM"
     }
 
     public init(defaults: UserDefaults = .standard) {
@@ -46,5 +56,13 @@ public final class SwipePreferences: ObservableObject {
         wrapAround = defaults.object(forKey: Keys.wrapAround) as? Bool ?? true
         skipEmpty = defaults.object(forKey: Keys.skipEmpty) as? Bool ?? true
         showHUD = defaults.object(forKey: Keys.showHUD) as? Bool ?? true
+        let storedStep = defaults.object(forKey: Keys.stepDistance) as? Double ?? Self.defaultStepDistanceMM
+        stepDistanceMM = storedStep.clamped(to: Self.stepDistanceRange)
+    }
+}
+
+private extension Double {
+    func clamped(to range: ClosedRange<Double>) -> Double {
+        min(max(self, range.lowerBound), range.upperBound)
     }
 }

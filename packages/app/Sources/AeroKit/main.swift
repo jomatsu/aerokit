@@ -34,6 +34,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // A launcher may have started us hidden (`open -j`); a hidden app
+        // shows no windows at all, so the exposé overlay and the swipe HUD
+        // would silently never appear. Accessory apps own no key focus, so
+        // unhiding steals nothing.
+        NSApp.unhide(nil)
 
         let coordinator = AppCoordinator()
         coordinator.start()

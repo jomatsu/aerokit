@@ -28,7 +28,11 @@ final class AppCoordinator {
         client = AeroSpaceClient(executablePath: AeroSpaceClient.detectExecutablePath())
         switcher = SwitcherController(hotKeyCenter: hotKeyCenter)
         expose = ExposeController(client: client, hotKeyCenter: hotKeyCenter)
-        swipe = SwipeController(client: client)
+        // The swipe HUD reuses the switcher's workspace snapshots as its
+        // thumbnail previews.
+        swipe = SwipeController(client: client) { [switcher] workspace in
+            switcher.snapshotImage(for: workspace)
+        }
     }
 
     func start() {
@@ -51,13 +55,16 @@ final class AppCoordinator {
         expose.start()
         swipe.start()
 
-        swipeMonitor.onSwipe = { [weak self] direction in
-            fputs("AeroKit[debug]: swipe \(direction)\n", stderr)
-            switch direction {
-            case .up, .down:
-                self?.expose.handleSwipe(direction)
-            case .left, .right:
-                self?.swipe.handleSwipe(direction)
+        swipeMonitor.onSwipeEvent = { [weak self] event in
+            switch event.axis {
+            case .horizontal:
+                self?.swipe.handle(event)
+            case .vertical:
+                // Exposé toggles are discrete; only the release outcome
+                // matters and a cancelled gesture does nothing.
+                if case let .ended(_, steps) = event, steps != 0 {
+                    self?.expose.handleSwipe(steps > 0 ? .up : .down)
+                }
             }
         }
         expose.onSwipePreferenceChanged = { [weak self] in self?.updateSwipeMonitor() }
@@ -69,10 +76,11 @@ final class AppCoordinator {
     /// when none does, so the private framework is only touched when needed.
     private func updateSwipeMonitor() {
         let wanted = expose.wantsSwipeGestures || swipe.wantsSwipeGestures
+        // Setting this restarts a running monitor when the value changed.
+        swipeMonitor.stepDistanceMM = Float(swipe.stepDistanceMM)
         var running = false
         if wanted {
             running = swipeMonitor.start()
-            fputs("AeroKit[debug]: swipe monitor start -> \(running)\n", stderr)
             if !running {
                 fputs("AeroKit: trackpad swipe monitor failed to start\n", stderr)
             }

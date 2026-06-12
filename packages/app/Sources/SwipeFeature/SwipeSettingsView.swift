@@ -56,6 +56,25 @@ struct SwipeSettingsView: View {
             ) {
                 SettingsToggle(isOn: $preferences.showHUD, isEnabled: preferences.isEnabled)
             }
+            SettingsDivider()
+            SettingsRow(
+                title: "Swipe distance per workspace",
+                subtitle: "How far your fingers travel for each workspace step"
+            ) {
+                HStack(spacing: 8) {
+                    Slider(
+                        value: $preferences.stepDistanceMM,
+                        in: SwipePreferences.stepDistanceRange,
+                        step: 5
+                    )
+                    .frame(width: 140)
+                    .disabled(!preferences.isEnabled)
+                    Text("\(Int(preferences.stepDistanceMM)) mm")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .trailing)
+                }
+            }
         }
     }
 }

@@ -91,7 +91,7 @@ cat > "$LAUNCH_AGENT" <<PLIST
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/open</string>
-    <string>-gj</string>
+    <string>-g</string>
     <string>$APP_DIR</string>
   </array>
   <key>RunAtLoad</key>

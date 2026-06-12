@@ -9,18 +9,34 @@ import Foundation
 /// link-time dependency on a private framework.
 @MainActor
 public final class TrackpadSwipeMonitor {
+    /// Outcome of a vertical gesture, for consumers with discrete up/down
+    /// actions (exposé). Horizontal consumers track SwipeEvent instead.
     public enum Direction: Sendable {
         case up
         case down
-        case left
-        case right
     }
 
-    /// Called on the main actor whenever a three-finger swipe crosses the
-    /// distance threshold; fires once per touch-down.
-    public var onSwipe: ((Direction) -> Void)?
+    /// Called on the main actor for every gesture lifecycle event, in
+    /// order: one `began`, a `moved` per contact frame, one `ended`.
+    public var onSwipeEvent: ((SwipeEvent) -> Void)?
 
     public private(set) var isRunning = false
+
+    /// Single source for the step distance default; preferences and
+    /// detectors derive from it.
+    public nonisolated static let defaultStepDistanceMM: Float = 35
+
+    /// Finger travel in millimeters worth one committed step; restarting
+    /// applies it because each device's detector bakes the value in.
+    public var stepDistanceMM = TrackpadSwipeMonitor.defaultStepDistanceMM {
+        didSet {
+            guard isRunning, oldValue != stepDistanceMM else {
+                return
+            }
+            stop()
+            start()
+        }
+    }
 
     /// Settings-pane message for a feature whose swipe gesture is enabled
     /// while the shared monitor could not start; nil when there is nothing
@@ -32,29 +48,41 @@ public final class TrackpadSwipeMonitor {
     }
 
     /// Routes the C callback — which cannot capture context — back to the
-    /// monitor that registered it. Lock-protected because start()/stop()
-    /// assign on the main actor while the callback reads on a
-    /// MultitouchSupport thread. Only one monitor runs at a time.
-    private static let active = LockedWeakMonitor()
+    /// monitor that registered it and to that device's detector.
+    /// Lock-protected because start()/stop() assign on the main actor while
+    /// the callback reads on a MultitouchSupport thread. Only one monitor
+    /// runs at a time.
+    private static let active = ActiveState()
 
-    private final class LockedWeakMonitor: @unchecked Sendable {
+    private final class ActiveState: @unchecked Sendable {
         private let lock = NSLock()
         private weak var monitor: TrackpadSwipeMonitor?
+        private var detectors: [UnsafeRawPointer: SwipeDetector] = [:]
 
-        func get() -> TrackpadSwipeMonitor? {
-            lock.lock()
-            defer { lock.unlock() }
-            return monitor
-        }
-
-        func set(_ monitor: TrackpadSwipeMonitor?) {
+        func activate(_ monitor: TrackpadSwipeMonitor, detectors: [UnsafeRawPointer: SwipeDetector]) {
             lock.lock()
             defer { lock.unlock() }
             self.monitor = monitor
+            self.detectors = detectors
+        }
+
+        func deactivate() {
+            lock.lock()
+            defer { lock.unlock() }
+            monitor = nil
+            detectors = [:]
+        }
+
+        func lookup(_ device: UnsafeRawPointer?) -> (TrackpadSwipeMonitor, SwipeDetector)? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let monitor, let device, let detector = detectors[device] else {
+                return nil
+            }
+            return (monitor, detector)
         }
     }
 
-    private let detector = SwipeDetector()
     private var devices: CFArray?
     private var framework: Framework?
 
@@ -76,16 +104,26 @@ public final class TrackpadSwipeMonitor {
             return false
         }
 
-        Self.active.set(self)
         devices = list
+        var detectors: [UnsafeRawPointer: SwipeDetector] = [:]
         for index in 0 ..< CFArrayGetCount(list) {
             guard let device = CFArrayGetValueAtIndex(list, index) else {
                 continue
             }
             let reference = MTDeviceRef(mutating: device)
+            let pad = framework.padSizeMM(of: reference)
+            // One detector per device: each trackpad gets thresholds scaled
+            // to its physical size, and frames from a second pad can never
+            // corrupt another gesture's baseline.
+            detectors[device] = SwipeDetector(
+                padWidthMM: pad.width,
+                padHeightMM: pad.height,
+                stepDistanceMM: stepDistanceMM
+            )
             framework.registerCallback(reference, Self.contactCallback)
             framework.startDevice(reference, 0)
         }
+        Self.active.activate(self, detectors: detectors)
         isRunning = true
         return true
     }
@@ -103,10 +141,9 @@ public final class TrackpadSwipeMonitor {
             framework.unregisterCallback(reference, Self.contactCallback)
         }
         self.devices = nil
-        Self.active.set(nil)
-        // A gesture in progress at stop time must not leave a stale
-        // baseline behind for the next start().
-        detector.reset()
+        // Dropping the detectors also drops any in-flight gesture state, so
+        // the next start() always measures from a fresh baseline.
+        Self.active.deactivate()
         isRunning = false
     }
 
@@ -119,28 +156,54 @@ public final class TrackpadSwipeMonitor {
         UnsafeMutableRawPointer?, UnsafeRawPointer?, Int32, Double, Int32
     ) -> Int32
 
-    /// Delivered on a MultitouchSupport background thread.
-    private static let contactCallback: ContactCallback = { _, touches, count, _, _ in
-        guard let monitor = TrackpadSwipeMonitor.active.get() else {
+    /// Delivered on a MultitouchSupport background thread. Dispatching via
+    /// the main queue (not Task) keeps the events of one gesture in order.
+    private static let contactCallback: ContactCallback = { device, touches, count, _, _ in
+        guard let (monitor, detector) = TrackpadSwipeMonitor.active.lookup(device.map(UnsafeRawPointer.init)) else {
             return 0
         }
         let bound = touches?.assumingMemoryBound(to: MTTouch.self)
-        if let direction = monitor.detector.process(touches: bound, count: Int(count)) {
-            Task { @MainActor in
-                monitor.onSwipe?(direction)
+        let events = detector.process(touches: bound, count: Int(count))
+        if !events.isEmpty {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    for event in events {
+                        monitor.onSwipeEvent?(event)
+                    }
+                }
             }
         }
         return 0
     }
 
-    /// The resolved private entry points; nil fields never occur — load()
-    /// fails as a whole when any symbol is missing.
+    /// The resolved private entry points; the non-optional fields never hold
+    /// nil — load() fails as a whole when any required symbol is missing.
     private struct Framework {
         var createList: @convention(c) () -> Unmanaged<CFArray>?
         var registerCallback: @convention(c) (MTDeviceRef?, ContactCallback?) -> Void
         var unregisterCallback: @convention(c) (MTDeviceRef?, ContactCallback?) -> Void
         var startDevice: @convention(c) (MTDeviceRef?, Int32) -> Void
         var stopDevice: @convention(c) (MTDeviceRef?) -> Void
+        /// Optional because losing it only degrades threshold accuracy, not
+        /// the feature; reports the pad size in hundredths of a millimeter.
+        var surfaceDimensions: (@convention(c) (
+            MTDeviceRef?, UnsafeMutablePointer<Int32>?, UnsafeMutablePointer<Int32>?
+        ) -> Int32)?
+
+        /// Physical pad size in millimeters, so detector thresholds mean the
+        /// same finger travel on every trackpad model. Falls back to
+        /// built-in MacBook pad dimensions on implausible values.
+        func padSizeMM(of device: MTDeviceRef) -> (width: Float, height: Float) {
+            var width: Int32 = 0
+            var height: Int32 = 0
+            if let surfaceDimensions {
+                _ = surfaceDimensions(device, &width, &height)
+            }
+            guard width > 1000, width < 50000, height > 1000, height < 50000 else {
+                return SwipeDetector.fallbackPadSizeMM
+            }
+            return (Float(width) / 100, Float(height) / 100)
+        }
 
         static func load() -> Framework? {
             let path = "/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport"
@@ -176,7 +239,13 @@ public final class TrackpadSwipeMonitor {
                 registerCallback: register,
                 unregisterCallback: unregister,
                 startDevice: start,
-                stopDevice: stop
+                stopDevice: stop,
+                surfaceDimensions: symbol(
+                    "MTDeviceGetSensorSurfaceDimensions",
+                    as: (@convention(c) (
+                        MTDeviceRef?, UnsafeMutablePointer<Int32>?, UnsafeMutablePointer<Int32>?
+                    ) -> Int32).self
+                )
             )
         }
     }
@@ -219,78 +288,271 @@ struct MTTouch {
     }
 }
 
-/// Turns raw contact frames into at most one swipe per touch-down. Runs on
-/// the MultitouchSupport callback thread; the lock keeps frames from
-/// multiple devices from interleaving.
+/// The axis a three-finger gesture locked onto.
+public enum SwipeAxis: Equatable, Sendable {
+    case horizontal
+    case vertical
+}
+
+/// Lifecycle of one three-finger gesture, in `NSEvent.trackSwipeEvent`
+/// style: progress follows the fingers continuously and the outcome is
+/// decided when they lift, so a swipe pulled back before release cancels.
+public enum SwipeEvent: Equatable, Sendable {
+    /// The gesture's travel picked an axis; `moved` events follow.
+    case began(SwipeAxis)
+    /// Signed progress along the locked axis: +1.0 is the travel a slow
+    /// swipe needs to commit one step, toward the right or top of the pad.
+    case moved(SwipeAxis, progress: Float)
+    /// The fingers lifted. `steps` is the committed step count (negative
+    /// means left or down); 0 means the gesture cancelled — pulled back or
+    /// too short.
+    case ended(SwipeAxis, steps: Int)
+
+    public var axis: SwipeAxis {
+        switch self {
+        case let .began(axis), let .moved(axis, _), let .ended(axis, _):
+            axis
+        }
+    }
+}
+
+/// Turns raw contact frames into three-finger gesture events, modeled on how
+/// macOS's own gesture engine behaves: thresholds are physical millimeters
+/// so every pad size feels alike, the swipe axis locks early in the gesture,
+/// all three fingers must move together before it engages, and at release a
+/// fast flick commits from a shorter distance than a slow drag. Runs on the
+/// MultitouchSupport callback thread; the lock keeps frames from concurrent
+/// callbacks from interleaving.
 final class SwipeDetector: @unchecked Sendable {
-    /// Normalized trackpad units (the pad is 0…1 on both axes) the average
-    /// finger position must travel before a swipe fires.
-    private static let threshold: Float = 0.12
+    /// Travel after which the swipe axis locks to the dominant direction.
+    private static let axisLockDistanceMM: Float = 3
+    /// How decisively one axis must beat the other to lock; until then a
+    /// diagonal wobble keeps the gesture undecided rather than guessing.
+    private static let axisDominanceRatio: Float = 1.2
+    /// Seconds of post-release coasting credited to the commit: the
+    /// fingers' release velocity projects this far ahead, so a flick
+    /// commits the step it was clearly headed for while the residual drift
+    /// of a careful drag barely moves the projection.
+    private static let momentumProjectionSeconds: Float = 0.15
+    /// Momentum may add at most one step beyond the travelled distance, so
+    /// a violent flick cannot fly past what the fingers actually did.
+    private static let momentumStepCap: Float = 1.0
+    /// Every finger must itself travel this far in the swipe direction
+    /// before the axis can lock; splaying or pinching fingers can move the
+    /// centroid without anyone having swiped.
+    private static let perFingerDistanceMM: Float = 2
+    /// Consecutive frames with fewer than three fingers tolerated
+    /// mid-gesture; light contacts flicker in and out between frames.
+    private static let dropoutGraceFrames = 2
 
-    private let lock = NSLock()
-    private var isTracking = false
-    private var hasFired = false
-    private var startX: Float = 0
-    private var startY: Float = 0
-
-    /// Forgets any in-flight gesture so a restarted monitor measures from
-    /// a fresh baseline instead of a stale one.
-    func reset() {
-        lock.lock()
-        defer { lock.unlock() }
-        isTracking = false
-        hasFired = false
+    private enum Phase {
+        case idle
+        /// Three fingers are down; their travel has not picked an axis yet.
+        case tracking
+        case locked(SwipeAxis)
+        /// A fourth finger appeared. Staying cancelled until every finger
+        /// lifts keeps a partially raised four-finger gesture from swiping.
+        case cancelled
     }
 
-    func process(touches: UnsafePointer<MTTouch>?, count: Int) -> TrackpadSwipeMonitor.Direction? {
+    private let padWidthMM: Float
+    private let padHeightMM: Float
+    /// Travel worth one committed step: progress 1.0. Commits round to the
+    /// nearest step, so a slow swipe crosses into a step at half this
+    /// distance — the point where a progress UI already shows that step.
+    /// Long enough by default that a multi-step drag has a comfortable
+    /// release window around every step; user-tunable via settings.
+    private let stepDistanceMM: Float
+    private let lock = NSLock()
+    private var phase = Phase.idle
+    private var graceLeft = 0
+    /// Where each finger touched down, keyed by the hardware's contact
+    /// identifier; measuring every finger from its own start point keeps a
+    /// landing or lifting finger from jerking a shared average around.
+    private var baselines: [Int32: (x: Float, y: Float)] = [:]
+    /// Last readings while three fingers were down, used to decide the
+    /// outcome at release; speed is mm/s along the locked axis.
+    private var lastProgress: Float = 0
+    private var lastSpeed: Float = 0
+
+    /// Built-in MacBook pad dimensions, the fallback when the private
+    /// surface-dimensions call is unavailable.
+    static let fallbackPadSizeMM: (width: Float, height: Float) = (120, 80)
+
+    init(
+        padWidthMM: Float = SwipeDetector.fallbackPadSizeMM.width,
+        padHeightMM: Float = SwipeDetector.fallbackPadSizeMM.height,
+        stepDistanceMM: Float = TrackpadSwipeMonitor.defaultStepDistanceMM
+    ) {
+        self.padWidthMM = padWidthMM
+        self.padHeightMM = padHeightMM
+        self.stepDistanceMM = stepDistanceMM
+    }
+
+    func process(touches: UnsafePointer<MTTouch>?, count: Int) -> [SwipeEvent] {
         lock.lock()
         defer { lock.unlock() }
 
-        var sumX: Float = 0
-        var sumY: Float = 0
         var touching = 0
         if let touches {
             for index in 0 ..< count where touches[index].isTouching {
                 touching += 1
-                sumX += touches[index].normalized.position.horizontal
-                sumY += touches[index].normalized.position.vertical
             }
         }
 
-        // Anything other than exactly three fingers ends the gesture; the
-        // next three-finger frame starts a fresh baseline.
-        guard touching == 3 else {
-            isTracking = false
-            return nil
+        if touching == 0 {
+            return endGesture()
+        }
+        if touching > 3 {
+            // The gesture is something else; report a cancel if one was in
+            // flight so consumers can settle their UI.
+            let events = cancelEvents()
+            phase = .cancelled
+            baselines = [:]
+            return events
         }
 
-        let averageX = sumX / 3
-        let averageY = sumY / 3
-        if !isTracking {
-            isTracking = true
-            hasFired = false
-            startX = averageX
-            startY = averageY
-            return nil
+        // Resolve every frame that needs no per-finger data before
+        // materializing it, so ordinary one- and two-finger pointer use —
+        // the vast majority of the ~120 Hz contact frames — allocates
+        // nothing here.
+        switch phase {
+        case .cancelled:
+            return []
+        case .idle:
+            guard touching == 3 else {
+                return []
+            }
+        case .tracking, .locked:
+            if touching < 3 {
+                graceLeft -= 1
+                if graceLeft < 0 {
+                    return endGesture()
+                }
+                return []
+            }
         }
 
-        guard !hasFired else {
-            return nil
+        // Exactly three fingers from here on.
+        var fingers: [(id: Int32, x: Float, y: Float, vx: Float, vy: Float)] = []
+        fingers.reserveCapacity(3)
+        if let touches {
+            for index in 0 ..< count where touches[index].isTouching {
+                let touch = touches[index]
+                fingers.append((
+                    id: touch.identifier,
+                    x: touch.normalized.position.horizontal,
+                    y: touch.normalized.position.vertical,
+                    vx: touch.normalized.velocity.horizontal,
+                    vy: touch.normalized.velocity.vertical
+                ))
+            }
         }
-        let deltaX = averageX - startX
-        let deltaY = averageY - startY
-        // The dominant axis decides the direction so a diagonal drift never
-        // fires both a workspace switch and an overlay toggle.
-        if abs(deltaY) >= Self.threshold, abs(deltaY) > abs(deltaX) {
-            hasFired = true
-            // Normalized y grows toward the top edge of the pad.
-            return deltaY > 0 ? .up : .down
+
+        if case .idle = phase {
+            phase = .tracking
+            graceLeft = Self.dropoutGraceFrames
+            baselines = .init(uniqueKeysWithValues: fingers.map { ($0.id, (x: $0.x, y: $0.y)) })
+            lastProgress = 0
+            lastSpeed = 0
+            return []
         }
-        if abs(deltaX) >= Self.threshold, abs(deltaX) > abs(deltaY) {
-            hasFired = true
-            // Normalized x grows toward the right edge of the pad.
-            return deltaX > 0 ? .right : .left
+        graceLeft = Self.dropoutGraceFrames
+
+        // A finger that lands mid-gesture measures from where it landed.
+        for finger in fingers where baselines[finger.id] == nil {
+            baselines[finger.id] = (x: finger.x, y: finger.y)
         }
-        return nil
+
+        // Per-finger displacement in millimeters from each finger's own
+        // touch-down point. Normalized y grows toward the top edge of the
+        // pad, so positive vertical displacement means "up" already.
+        let displacements = fingers.compactMap { finger -> (x: Float, y: Float)? in
+            guard let baseline = baselines[finger.id] else {
+                return nil
+            }
+            return (
+                x: (finger.x - baseline.x) * padWidthMM,
+                y: (finger.y - baseline.y) * padHeightMM
+            )
+        }
+        let centroidX = displacements.reduce(0) { $0 + $1.x } / 3
+        let centroidY = displacements.reduce(0) { $0 + $1.y } / 3
+
+        var events: [SwipeEvent] = []
+        if case .tracking = phase {
+            let absX = abs(centroidX)
+            let absY = abs(centroidY)
+            guard max(absX, absY) >= Self.axisLockDistanceMM else {
+                return []
+            }
+            let axis: SwipeAxis
+            if absX > absY * Self.axisDominanceRatio {
+                axis = .horizontal
+            } else if absY > absX * Self.axisDominanceRatio {
+                axis = .vertical
+            } else {
+                return []
+            }
+            let centroid = axis == .horizontal ? centroidX : centroidY
+            let unanimous = displacements.allSatisfy { displacement in
+                let along = axis == .horizontal ? displacement.x : displacement.y
+                return along * centroid > 0 && abs(along) >= Self.perFingerDistanceMM
+            }
+            guard unanimous else {
+                return []
+            }
+            phase = .locked(axis)
+            events.append(.began(axis))
+        }
+        guard case let .locked(axis) = phase else {
+            return []
+        }
+
+        let centroid = axis == .horizontal ? centroidX : centroidY
+        // Velocity comes pre-smoothed from the framework in normalized
+        // units per second; keep the last reading for the release decision.
+        lastSpeed = fingers.reduce(Float(0)) { sum, finger in
+            sum + (axis == .horizontal ? finger.vx * padWidthMM : finger.vy * padHeightMM)
+        } / 3
+        lastProgress = centroid / stepDistanceMM
+        events.append(.moved(axis, progress: lastProgress))
+        return events
+    }
+
+    /// Every finger lifted (or stayed below three past the grace window):
+    /// decide what the gesture committed and reset for the next touch-down.
+    private func endGesture() -> [SwipeEvent] {
+        defer {
+            phase = .idle
+            baselines = [:]
+            lastProgress = 0
+            lastSpeed = 0
+        }
+        guard case let .locked(axis) = phase else {
+            return []
+        }
+        return [.ended(axis, steps: steps(progress: lastProgress, speed: lastSpeed))]
+    }
+
+    private func cancelEvents() -> [SwipeEvent] {
+        guard case let .locked(axis) = phase else {
+            return []
+        }
+        return [.ended(axis, steps: 0)]
+    }
+
+    private func steps(progress: Float, speed: Float) -> Int {
+        // Project the release velocity ahead like scroll-view deceleration:
+        // momentum carries a flick into the step it was headed for, and an
+        // opposing throw-back naturally subtracts toward a cancel.
+        let momentum = speed * Self.momentumProjectionSeconds / stepDistanceMM
+        let projected = progress + max(-Self.momentumStepCap, min(Self.momentumStepCap, momentum))
+        // Round to nearest so the gesture commits whatever step its
+        // projection is closest to — what a progress UI shows under the
+        // fingers at release. The epsilon keeps float noise from flipping
+        // exact-half-way releases toward zero.
+        let epsilon: Float = projected >= 0 ? 0.0001 : -0.0001
+        return Int((projected + epsilon).rounded())
     }
 }

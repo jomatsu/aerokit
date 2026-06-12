@@ -450,10 +450,11 @@ public final class ExposeController {
 // MARK: - Trackpad swipes
 
 extension ExposeController {
-    /// Mirrors the system gestures: swipe up opens (or switches to) the
-    /// workspace overview, swipe down opens app exposé when nothing is
-    /// shown and otherwise closes whatever is open. Horizontal swipes
-    /// belong to the workspace switcher and are ignored here.
+    /// Mirrors the system gestures: from the normal view, swipe up opens
+    /// the workspace overview (Mission Control) and swipe down opens app
+    /// exposé. The reverse gesture returns to the normal view — down closes
+    /// the overview, up closes app exposé — and repeating the opening
+    /// gesture while its overlay is up does nothing, exactly as macOS does.
     public func handleSwipe(_ direction: TrackpadSwipeMonitor.Direction) {
         guard preferences.threeFingerSwipe else {
             return
@@ -461,18 +462,21 @@ extension ExposeController {
         let isActive = overlay.isVisible || presentTask != nil
         switch direction {
         case .up:
-            guard !(isActive && requestedScope == .workspace) else {
-                return
+            if isActive {
+                if requestedScope == .app {
+                    dismiss()
+                }
+            } else {
+                toggle(scope: .workspace)
             }
-            toggle(scope: .workspace)
         case .down:
             if isActive {
-                dismiss()
+                if requestedScope == .workspace {
+                    dismiss()
+                }
             } else {
                 toggle(scope: .app)
             }
-        case .left, .right:
-            break
         }
     }
 
