@@ -203,9 +203,27 @@ public final class ExposeController {
         overlay.show(
             session: session,
             on: screen,
-            showsGroupingHint: scope == .workspace && preferences.showGroupToggleHint
+            showsGroupingHint: scope == .workspace && preferences.showGroupToggleHint,
+            // The motion continues the gesture that owns each scope: the
+            // workspace overview rises after a swipe up, app exposé descends
+            // after a swipe down — also from hotkeys, so each scope keeps a
+            // recognizable signature.
+            slidesFrom: scope == .workspace ? .bottom : .top
         )
-        startCaptures(session: session, bounds: context.bounds, screen: screen)
+        // The panel is up but transparent; the entry cascade waits for the
+        // fast capture pass so the rows rise with real window pictures, not
+        // icon placeholders that pop into images mid-animation. A deadline
+        // caps the wait — better a rare placeholder than a laggy gesture.
+        startCaptures(session: session, bounds: context.bounds, screen: screen) { [weak self] in
+            self?.overlay.beginEntry()
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard let self, epoch == presentEpoch else {
+                return
+            }
+            overlay.beginEntry()
+        }
 
         startDigitInterceptorIfEnabled()
     }
@@ -308,7 +326,17 @@ public final class ExposeController {
 
     // MARK: - Captures
 
-    private func startCaptures(session: ExposeSession, bounds: [CGWindowID: CGRect], screen: NSScreen) {
+    /// `onInitialCaptures` fires on the main actor once the fast capture
+    /// pass has delivered everything it could — the cue that the overlay's
+    /// tiles are as pictorial as they are going to quickly get. Skipped if
+    /// the presentation was dismissed (cancellation) so a stale session
+    /// can't start a newer overlay's entry.
+    private func startCaptures(
+        session: ExposeSession,
+        bounds: [CGWindowID: CGRect],
+        screen: NSScreen,
+        onInitialCaptures: @escaping @MainActor () -> Void
+    ) {
         let cell = TileGeometry.cellSize(
             container: screen.frame.size,
             grid: session.grid,
@@ -351,7 +379,12 @@ public final class ExposeController {
                 }
             }
 
-            guard !missed.isEmpty, !Task.isCancelled else {
+            guard !Task.isCancelled else {
+                return
+            }
+            onInitialCaptures()
+
+            guard !missed.isEmpty else {
                 return
             }
             await Self.captureFallback(
@@ -449,13 +482,13 @@ public final class ExposeController {
 
 // MARK: - Trackpad swipes
 
-extension ExposeController {
+public extension ExposeController {
     /// Mirrors the system gestures: from the normal view, swipe up opens
     /// the workspace overview (Mission Control) and swipe down opens app
     /// exposé. The reverse gesture returns to the normal view — down closes
     /// the overview, up closes app exposé — and repeating the opening
     /// gesture while its overlay is up does nothing, exactly as macOS does.
-    public func handleSwipe(_ direction: TrackpadSwipeMonitor.Direction) {
+    func handleSwipe(_ direction: TrackpadSwipeMonitor.Direction) {
         guard preferences.threeFingerSwipe else {
             return
         }
@@ -481,7 +514,7 @@ extension ExposeController {
     }
 
     /// Reflects the shared monitor's state in this feature's settings pane.
-    public func updateSwipeAvailability(monitorRunning: Bool) {
+    func updateSwipeAvailability(monitorRunning: Bool) {
         settingsModel.swipeErrorMessage = TrackpadSwipeMonitor.unavailableMessage(
             gestureEnabled: preferences.threeFingerSwipe,
             monitorRunning: monitorRunning

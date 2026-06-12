@@ -3,8 +3,30 @@ import SwiftUI
 
 /// Full-screen Exposé overview: a frosted backdrop with the workspace's
 /// windows laid out in a grid of live previews.
+///
+/// The motion is a row cascade keyed to the opening gesture: each grid row
+/// rises a short distance into place, and the rows take off in the
+/// gesture's order — swipe up and the wave runs bottom-to-top, swipe down
+/// and it runs top-to-bottom. Direction comes from choreography, not from
+/// shoving the whole grid around, so it reads instantly without ever
+/// looking like a slide transition. Raycast restraint everywhere else:
+/// short travel, critically damped springs, and a dismissal that is a
+/// single fast fade — exits answer to the hand, they don't perform.
 struct ExposeOverlayView: View {
+    /// How long the exit animation runs; the panel stays up exactly this
+    /// long after `motion.shown` flips off.
+    static let exitMilliseconds = 120
+
+    /// How far a row rises (or descends) into place. Big enough to read
+    /// from across the room — a one-row workspace gets no stagger, so the
+    /// travel alone has to carry the direction.
+    private static let rowTravel: CGFloat = 52
+    /// Take-off delay between consecutive rows; the whole wave stays well
+    /// under the time a hand needs to leave the trackpad.
+    private static let rowStagger: Double = 0.04
+
     let session: ExposeSession
+    let motion: ExposeOverlayMotion
     /// The grouping-toggle key, skipped by the quick-select labels.
     let quickSelectExclusion: Character?
     /// Whether the bottom bar advertises the grouping-toggle key; off for
@@ -15,31 +37,57 @@ struct ExposeOverlayView: View {
     let onCancel: () -> Void
     let onToggleGrouping: () -> Void
 
-    @State private var appeared = false
-
     var body: some View {
         ZStack {
+            // Keyed to `veiled`, not `shown`: the dim answers the gesture
+            // the moment the panel is up, while the grid waits for its
+            // pictures — the screen never feels like it ignored the hand.
             backdrop
-                .opacity(appeared ? 1 : 0)
+                .opacity(motion.veiled ? 1 : 0)
+                .animation(
+                    .easeOut(duration: motion.veiled ? 0.16 : Double(Self.exitMilliseconds) / 1000),
+                    value: motion.veiled
+                )
 
             GeometryReader { proxy in
                 grid(in: proxy.size)
             }
-            .opacity(appeared ? 1 : 0)
-            .scaleEffect(appeared ? 1 : 0.97)
 
             if showsGroupingHint {
                 groupingHintBar
                     .frame(maxHeight: .infinity, alignment: .bottom)
-                    .opacity(appeared ? 1 : 0)
+                    .opacity(motion.shown ? 1 : 0)
+                    .animation(.easeOut(duration: 0.2), value: motion.shown)
             }
         }
         .ignoresSafeArea()
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.17)) {
-                appeared = true
-            }
-        }
+    }
+
+    /// The cascade, applied per visual row: a rise (or descent) with a
+    /// critically damped spring, taking off `rank` rows after the row at
+    /// the gesture's edge. The fade finishes well before the travel does,
+    /// so most of the distance is covered at full opacity — that's what
+    /// makes the direction legible at a glance. Dismissal drops the
+    /// choreography — every row fades together, as fast as the panel goes
+    /// away.
+    private func cascade(rank: Int, of count: Int, content: some View) -> some View {
+        let order = motion.edge == .bottom ? count - 1 - rank : rank
+        let delay = Double(order) * Self.rowStagger
+        let hiddenOffset: CGFloat = motion.edge == .bottom ? Self.rowTravel : -Self.rowTravel
+        let exit: Animation = .easeOut(duration: Double(Self.exitMilliseconds) / 1000)
+        return content
+            .opacity(motion.shown ? 1 : 0)
+            .animation(
+                motion.shown ? .easeOut(duration: 0.13).delay(delay) : exit,
+                value: motion.shown
+            )
+            .offset(y: motion.shown ? 0 : hiddenOffset)
+            .animation(
+                motion.shown
+                    ? .spring(response: 0.32, dampingFraction: 1).delay(delay)
+                    : exit,
+                value: motion.shown
+            )
     }
 
     private var backdrop: some View {
@@ -103,8 +151,20 @@ struct ExposeOverlayView: View {
             margin: TileMetrics.margin
         )
 
+        let rows = session.rowRanges(in: 0 ..< session.tiles.count)
         return VStack(spacing: TileMetrics.gap) {
-            tileRows(in: 0 ..< session.tiles.count, gap: TileMetrics.gap, cell: cell)
+            ForEach(Array(rows.enumerated()), id: \.element.lowerBound) { rank, row in
+                cascade(
+                    rank: rank,
+                    of: rows.count,
+                    content:
+                    HStack(spacing: TileMetrics.gap) {
+                        ForEach(row, id: \.self) { index in
+                            tileView(at: index, cell: cell)
+                        }
+                    }
+                )
+            }
         }
         .frame(width: size.width, height: size.height)
     }
@@ -129,13 +189,20 @@ struct ExposeOverlayView: View {
             )
         )
 
+        // Shelf rows are the cascade unit here; a card's inner rows arrive
+        // with their card, keeping each app's windows one visual piece.
         return VStack(spacing: TileMetrics.gap) {
-            ForEach(sectionRows, id: \.first) { row in
-                HStack(alignment: .top, spacing: TileMetrics.gap) {
-                    ForEach(row, id: \.self) { sectionIndex in
-                        groupCard(sections[sectionIndex], cell: cell)
+            ForEach(Array(sectionRows.enumerated()), id: \.offset) { rank, row in
+                cascade(
+                    rank: rank,
+                    of: sectionRows.count,
+                    content:
+                    HStack(alignment: .top, spacing: TileMetrics.gap) {
+                        ForEach(row, id: \.self) { sectionIndex in
+                            groupCard(sections[sectionIndex], cell: cell)
+                        }
                     }
-                }
+                )
             }
         }
         .frame(width: size.width, height: size.height)

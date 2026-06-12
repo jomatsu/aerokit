@@ -17,8 +17,10 @@ private func withoutAnimation(_ body: () -> Void) {
 /// instead of re-appearing.
 @MainActor
 final class SwipeHUD {
-    /// How long the strip stays up after a gesture settles.
-    private static let displayDuration: Duration = .milliseconds(1000)
+    /// How long the strip stays up after a gesture settles: long enough to
+    /// confirm the landing workspace, short enough to feel dismissed by the
+    /// hand leaving the trackpad.
+    private static let displayDuration: Duration = .milliseconds(450)
     /// Distance from the bottom edge of the screen's visible frame.
     private static let bottomOffset: CGFloat = 80
     /// Derived from the view's own metrics — panel, shadow room below,

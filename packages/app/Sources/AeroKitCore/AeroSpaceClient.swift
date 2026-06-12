@@ -36,7 +36,10 @@ public final class AeroSpaceClient: Sendable {
     private let runner: any CommandRunning
     private let separator = "\u{1f}"
 
-    public init(executablePath: String, runner: any CommandRunning = ProcessRunner()) {
+    /// The default runner talks to the AeroSpace server over its unix
+    /// socket and only spawns `executablePath` as a fallback, so the
+    /// common path never pays for a process launch.
+    public init(executablePath: String, runner: any CommandRunning = AeroSpaceSocketRunner()) {
         self.executablePath = executablePath
         self.runner = runner
     }

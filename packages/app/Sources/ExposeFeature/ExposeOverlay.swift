@@ -1,6 +1,28 @@
 import AeroKitCore
 import AppKit
+import Observation
 import SwiftUI
+
+/// Drives the overview's in/out motion from the panel side. The edge ties
+/// the motion to the gesture that owns each scope — the workspace overview
+/// rises from the bottom like Mission Control after a swipe up, app exposé
+/// descends from the top after a swipe down — and dismissal plays the same
+/// path backwards, so the overlay always leaves the way it came.
+@MainActor
+@Observable
+final class ExposeOverlayMotion {
+    enum Edge {
+        case bottom
+        case top
+    }
+
+    var edge: Edge = .bottom
+    /// The backdrop's flag, raised the moment the panel is up so the screen
+    /// answers the gesture instantly, while the grid still waits for its
+    /// pictures.
+    var veiled = false
+    var shown = false
+}
 
 /// Hosts the SwiftUI overview in a borderless, non-activating panel that
 /// covers one screen, and translates panel events into session actions.
@@ -16,11 +38,17 @@ final class ExposeOverlay {
     var groupToggleKey: Character = "0"
 
     private let panel: OverlayPanel
+    private let motion = ExposeOverlayMotion()
     private var session: ExposeSession?
     private var mouseLocationAtShow = NSPoint.zero
+    /// Pending order-out at the end of the exit animation; non-nil while
+    /// the overlay is on its way off screen.
+    private var hideTask: Task<Void, Never>?
 
+    /// False as soon as the exit animation starts — to its callers the
+    /// overview is already gone, and a new trigger then re-presents it.
     var isVisible: Bool {
-        panel.isVisible
+        panel.isVisible && hideTask == nil
     }
 
     init() {
@@ -38,10 +66,21 @@ final class ExposeOverlay {
         }
     }
 
-    func show(session: ExposeSession, on screen: NSScreen, showsGroupingHint: Bool) {
+    func show(
+        session: ExposeSession,
+        on screen: NSScreen,
+        showsGroupingHint: Bool,
+        slidesFrom edge: ExposeOverlayMotion.Edge
+    ) {
+        hideTask?.cancel()
+        hideTask = nil
         self.session = session
+        motion.edge = edge
+        motion.veiled = false
+        motion.shown = false
         let view = ExposeOverlayView(
             session: session,
+            motion: motion,
             quickSelectExclusion: groupToggleKey,
             showsGroupingHint: showsGroupingHint,
             onActivate: { [weak self] index in self?.onActivate?(index) },
@@ -54,9 +93,50 @@ final class ExposeOverlay {
         mouseLocationAtShow = NSEvent.mouseLocation
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+        // Next runloop turn, after the hosting view's first frame, so the
+        // backdrop fades rather than slamming in.
+        Task { @MainActor [motion] in
+            motion.veiled = true
+        }
     }
 
+    /// Starts the entry cascade. Separate from `show` so the controller can
+    /// hold the grid (the backdrop is already dimming) until the preview
+    /// captures are in — the cascade then rises with real pictures instead
+    /// of icon placeholders that pop into images mid-flight. Idempotent:
+    /// the captures-done signal and the safety deadline can both call it.
+    func beginEntry() {
+        guard panel.isVisible, hideTask == nil else {
+            return
+        }
+        motion.shown = true
+    }
+
+    /// Plays the entry backwards — the grid retreats toward the edge it
+    /// came from — and only then takes the panel off screen.
     func hide() {
+        guard hideTask == nil else {
+            return
+        }
+        // A backdrop-only overlay (cancelled before its pictures arrived)
+        // still fades out rather than popping off.
+        guard panel.isVisible, motion.shown || motion.veiled else {
+            orderOut()
+            return
+        }
+        motion.veiled = false
+        motion.shown = false
+        hideTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(ExposeOverlayView.exitMilliseconds))
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            hideTask = nil
+            orderOut()
+        }
+    }
+
+    private func orderOut() {
         panel.orderOut(nil)
         // Drop the hosting view so the preview images release promptly.
         panel.contentView = nil
@@ -77,6 +157,11 @@ final class ExposeOverlay {
     /// Swallows every key while the overview is up; unbound keys are
     /// ignored rather than passed to the window behind.
     private func handleKey(_ event: NSEvent) -> Bool {
+        // The panel stays up through the exit animation; keys arriving then
+        // belong to nothing — swallow them without acting.
+        guard hideTask == nil else {
+            return true
+        }
         switch event.keyCode {
         case KeyCode.escape:
             onCancel?()
