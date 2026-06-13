@@ -9,6 +9,13 @@ enum TileMetrics {
     static let labelHeight: CGFloat = 22
     static let labelSpacing: CGFloat = 10
 
+    /// Height left for the window picture once the label row is paid for —
+    /// the tile's layout, the drag ghost's grab scale, and the snap-back
+    /// target must all agree on this split.
+    static func previewHeight(forCellHeight height: CGFloat) -> CGFloat {
+        height - labelHeight - labelSpacing
+    }
+
     // Grouped mode: each app is a rounded card — header, then its tiles
     // packed tighter than the gap between cards so the clusters read.
     static let groupTileGap: CGFloat = 16

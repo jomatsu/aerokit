@@ -40,11 +40,18 @@ public final class ExposeSession {
     public private(set) var sections: [Section]?
     /// Section indexes per shelf row while grouped; small apps share a row.
     public private(set) var sectionRows: [[Int]]?
+    /// Workspaces a window can be sent to, in AeroSpace's order; the drag
+    /// drop bar's content. Empty when the listing failed (no bar, no ops lost).
+    public private(set) var workspaceTargets: [WorkspaceTarget]
+    /// Snapshot previews for the drop bar's cards, keyed by workspace name;
+    /// missing entries render as placeholders.
+    public private(set) var workspacePreviews: [String: NSImage]
 
     private let containerAspect: CGFloat
     /// Window order as first presented (spatial); grouping is undone by
-    /// restoring this order.
-    private let defaultOrder: [CGWindowID]
+    /// restoring this order. Removed windows are pruned so ungrouping
+    /// cannot resurrect them.
+    private var defaultOrder: [CGWindowID]
 
     public init(
         windows: [ExposeWindow],
@@ -52,10 +59,14 @@ public final class ExposeSession {
         bounds: [CGWindowID: CGRect] = [:],
         focusedWindowID: CGWindowID? = nil,
         icons: [CGWindowID: NSImage] = [:],
-        groupByApp: Bool = false
+        groupByApp: Bool = false,
+        workspaceTargets: [WorkspaceTarget] = [],
+        workspacePreviews: [String: NSImage] = [:]
     ) {
         tiles = windows.map { Tile(window: $0, pointSize: bounds[$0.id]?.size, icon: icons[$0.id], image: nil) }
         self.containerAspect = containerAspect
+        self.workspaceTargets = workspaceTargets
+        self.workspacePreviews = workspacePreviews
         defaultOrder = windows.map(\.id)
         grid = GridDimensions.bestFit(count: windows.count, containerAspect: containerAspect)
         selectedIndex = windows.firstIndex { $0.id == focusedWindowID } ?? 0
@@ -69,6 +80,38 @@ public final class ExposeSession {
             return
         }
         tiles[index].image = image
+    }
+
+    /// Removes the tile of a window that left the overview (closed or moved
+    /// to another workspace) and re-lays-out the survivors. Selection lands
+    /// on the removed tile's successor — removing a tile before the
+    /// selection keeps the same window selected, removing the last clamps
+    /// to the new end.
+    public func removeTile(windowID: CGWindowID) {
+        guard let index = tiles.firstIndex(where: { $0.id == windowID }) else {
+            return
+        }
+        tiles.remove(at: index)
+        defaultOrder.removeAll { $0 == windowID }
+
+        if isGroupedByApp {
+            // Re-derive the sections from the survivors; an app's card
+            // disappears with its last window.
+            let groups = groupedTiles()
+            sections = Self.sections(for: groups)
+            let layout = GridDimensions.bestGroupedFit(
+                groupCounts: groups.map(\.tiles.count),
+                containerAspect: containerAspect
+            )
+            grid = layout.grid
+            sectionRows = layout.rows
+        } else {
+            grid = GridDimensions.bestFit(count: tiles.count, containerAspect: containerAspect)
+        }
+
+        if selectedIndex > index || selectedIndex >= tiles.count {
+            selectedIndex = max(0, min(selectedIndex - 1, tiles.count - 1))
+        }
     }
 
     public func select(_ index: Int) {

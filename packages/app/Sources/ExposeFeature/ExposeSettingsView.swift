@@ -139,6 +139,13 @@ struct ExposeSettingsView: View {
             ) {
                 SettingsToggle(isOn: $preferences.showGroupToggleHint)
             }
+            SettingsDivider()
+            SettingsRow(
+                title: "Follow moved window",
+                subtitle: "After \u{21E7}1\u{2013}9 or a drag moves a window, switch to its workspace instead of staying in the overview"
+            ) {
+                SettingsToggle(isOn: $preferences.followMovedWindow)
+            }
         }
     }
 }

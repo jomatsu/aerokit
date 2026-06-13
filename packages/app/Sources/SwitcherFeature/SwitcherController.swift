@@ -96,6 +96,15 @@ public final class SwitcherController {
         snapshotStore.snapshotImage(for: workspace)
     }
 
+    /// Sendable snapshot lookup for features that load previews off the
+    /// main actor (the exposé drop bar); captures only the locking store,
+    /// so cold-cache disk decodes never block presentation.
+    public nonisolated var workspacePreview: @Sendable (String) -> NSImage? {
+        { [snapshotStore] workspace in
+            snapshotStore.snapshotImage(for: workspace)
+        }
+    }
+
     /// Status-bar menu entry point: open settings and kick off a refresh so
     /// its progress is visible.
     public func refreshSnapshotsFromMenu() {

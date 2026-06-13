@@ -33,6 +33,13 @@ final class ExposeOverlay {
     var onMove: ((SelectionMove) -> Void)?
     var onHover: ((Int) -> Void)?
     var onToggleGrouping: (() -> Void)?
+    /// ⌘W on the selected tile.
+    var onCloseSelected: (() -> Void)?
+    /// ⇧1–9: send the selected tile's window to the workspace named by the
+    /// digit.
+    var onMoveSelectedToWorkspace: ((String) -> Void)?
+    /// A tile dropped on a workspace chip.
+    var onMoveToWorkspace: ((CGWindowID, String) -> Void)?
     /// Key that toggles app grouping; quick select skips it so they can't
     /// collide.
     var groupToggleKey: Character = "0"
@@ -86,7 +93,8 @@ final class ExposeOverlay {
             onActivate: { [weak self] index in self?.onActivate?(index) },
             onHover: { [weak self] index in self?.hover(index) },
             onCancel: { [weak self] in self?.onCancel?() },
-            onToggleGrouping: { [weak self] in self?.onToggleGrouping?() }
+            onToggleGrouping: { [weak self] in self?.onToggleGrouping?() },
+            onMoveToWorkspace: { [weak self] id, workspace in self?.onMoveToWorkspace?(id, workspace) }
         )
         panel.contentView = NSHostingView(rootView: view)
         panel.setFrame(screen.frame, display: true)
@@ -160,6 +168,23 @@ final class ExposeOverlay {
         // The panel stays up through the exit animation; keys arriving then
         // belong to nothing — swallow them without acting.
         guard hideTask == nil else {
+            return true
+        }
+        // Caps Lock rides along in the flags and must not break matching.
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        if flags.contains(.command) {
+            if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "w" {
+                onCloseSelected?()
+            }
+            // Swallow every ⌘ combo so ⌘+letter never falls into quick
+            // select.
+            return true
+        }
+        // ⇧1 types "!", so the digit comes from the key code, not the
+        // character. Exact-match on shift keeps ⇧Tab on the tab case below
+        // and leaves ⌥digit to the event tap.
+        if flags == .shift, let digit = ExposeDigitInterceptor.digit(for: Int64(event.keyCode)) {
+            onMoveSelectedToWorkspace?(String(digit))
             return true
         }
         switch event.keyCode {

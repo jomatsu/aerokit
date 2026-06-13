@@ -1,3 +1,4 @@
+import AeroKitCore
 import AppKit
 import Combine
 import SwiftUI
@@ -128,7 +129,7 @@ final class SwipeHUD {
             // Let the fade-out finish before the panel leaves the screen.
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
-            self.panel?.orderOut(nil)
+            panel?.orderOut(nil)
         }
     }
 
@@ -278,12 +279,17 @@ final class SwipeHUDModel: ObservableObject {
 struct SwipeHUDView: View {
     @ObservedObject var model: SwipeHUDModel
 
-    private static let thumbSize = CGSize(width: 140, height: 87.5)
-    private static let cellSpacing: CGFloat = 12
-    private static let captionSpacing: CGFloat = 6
-    private static let captionHeight: CGFloat = 14
-    private static let cardCornerRadius: CGFloat = 8
-    private static let panelCornerRadius: CGFloat = 18
+    // Card and panel chrome shared with the exposé drop bar.
+    private static let thumbSize = WorkspaceCardMetrics.thumbSize
+    private static let cellSpacing = WorkspaceCardMetrics.cellSpacing
+    private static let captionSpacing = WorkspaceCardMetrics.captionSpacing
+    private static let captionHeight = WorkspaceCardMetrics.captionHeight
+    private static let cardCornerRadius = WorkspaceCardMetrics.cardCornerRadius
+    private static let panelPadding = WorkspaceCardMetrics.panelPadding
+    private static var cellHeight: CGFloat {
+        WorkspaceCardMetrics.cellHeight
+    }
+
     /// The scrim band along the thumbnail's bottom edge and the app icons
     /// riding on it.
     private static let scrimHeight: CGFloat = 34
@@ -295,12 +301,8 @@ struct SwipeHUDView: View {
     /// How far past the row's ends the pill follows a rubber-banded
     /// overshoot before it stops (the cards' emphasis keeps moving).
     private static let highlightOverhang: CGFloat = 0.2
-    private static let panelPadding: CGFloat = 12
     /// Room below the panel for its drop shadow.
     static let bottomPadding: CGFloat = 20
-    private static var cellHeight: CGFloat {
-        thumbSize.height + captionSpacing + captionHeight
-    }
     /// The glass panel's full height; the HUD window derives its frame
     /// from this so the two can't drift apart.
     static var panelHeight: CGFloat {
@@ -353,30 +355,7 @@ struct SwipeHUDView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, Self.panelPadding)
-        .background {
-            RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
-                .fill(.black.opacity(0.5))
-                .background {
-                    RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                }
-                .overlay {
-                    // Raycast-style edge: bright at the top where the light
-                    // hits, falling off toward the bottom.
-                    RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [.white.opacity(0.22), .white.opacity(0.05)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ),
-                            lineWidth: 1
-                        )
-                }
-                // Soft and close — a heavy halo reads as smudges sticking
-                // out past the panel's sides.
-                .shadow(color: .black.opacity(0.28), radius: 14, y: 6)
-        }
+        .workspaceStripPanel()
     }
 
     /// The gliding selection: a soft pill that tracks the fingers'
@@ -419,69 +398,55 @@ struct SwipeHUDView: View {
     /// hairline, and selection ring.
     private func thumbnail(for name: String, emphasis: CGFloat) -> some View {
         let icons = model.icons[name] ?? []
-        return ZStack {
-            if let image = model.previews[name] {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Rectangle()
-                    .fill(.white.opacity(0.07))
-                Image(systemName: "macwindow")
-                    .font(.system(size: 15, weight: .light))
-                    .foregroundStyle(.white.opacity(0.28))
-            }
-        }
-        .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
-        .clipShape(RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous))
-        // Streaming-card scrim: a dark gradient band along the bottom edge
-        // that carries the app icons, so they read against any snapshot
-        // without floating loose on it. Filled into the card's shape so the
-        // rounded corners stay clean.
-        .overlay {
-            if !icons.isEmpty {
-                RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .black.opacity(0.65), location: 0),
-                                .init(color: .clear, location: Self.scrimHeight / Self.thumbSize.height),
-                            ],
-                            startPoint: .bottom,
-                            endPoint: .top
+        return WorkspaceCardThumbnail(image: model.previews[name])
+            // Streaming-card scrim: a dark gradient band along the bottom edge
+            // that carries the app icons, so they read against any snapshot
+            // without floating loose on it. Filled into the card's shape so the
+            // rounded corners stay clean.
+            .overlay {
+                if !icons.isEmpty {
+                    RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .black.opacity(0.65), location: 0),
+                                    .init(color: .clear, location: Self.scrimHeight / Self.thumbSize.height)
+                                ],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
                         )
-                    )
-            }
-        }
-        .overlay(alignment: .bottomLeading) {
-            HStack(spacing: Self.scrimIconSpacing) {
-                ForEach(0..<min(icons.count, Self.maxScrimIcons), id: \.self) { index in
-                    Image(nsImage: icons[index])
-                        .resizable()
-                        .frame(width: Self.scrimIconSize, height: Self.scrimIconSize)
                 }
             }
-            .padding(6)
-            .opacity(0.8 + 0.2 * emphasis)
-            .saturation(0.8 + 0.2 * emphasis)
-        }
-        // The dark veil lifts as the selection arrives, so the hierarchy
-        // comes from brightness instead of size.
-        .overlay {
-            RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
-                .fill(.black.opacity(0.32 * (1 - emphasis)))
-        }
-        .overlay {
-            // Hairline edge every card has, so thumbnails never bleed into
-            // the panel…
-            RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-        }
-        .overlay {
-            // …and the selection ring that fades in over it.
-            RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
-                .strokeBorder(.white.opacity(0.9 * emphasis), lineWidth: 1.5)
-        }
-        .shadow(color: .black.opacity(0.35 * emphasis), radius: 10, y: 4)
+            .overlay(alignment: .bottomLeading) {
+                HStack(spacing: Self.scrimIconSpacing) {
+                    ForEach(0 ..< min(icons.count, Self.maxScrimIcons), id: \.self) { index in
+                        Image(nsImage: icons[index])
+                            .resizable()
+                            .frame(width: Self.scrimIconSize, height: Self.scrimIconSize)
+                    }
+                }
+                .padding(6)
+                .opacity(0.8 + 0.2 * emphasis)
+                .saturation(0.8 + 0.2 * emphasis)
+            }
+            // The dark veil lifts as the selection arrives, so the hierarchy
+            // comes from brightness instead of size.
+            .overlay {
+                RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                    .fill(.black.opacity(0.32 * (1 - emphasis)))
+            }
+            .overlay {
+                // Hairline edge every card has, so thumbnails never bleed into
+                // the panel…
+                RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                    .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+            }
+            .overlay {
+                // …and the selection ring that fades in over it.
+                RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                    .strokeBorder(.white.opacity(0.9 * emphasis), lineWidth: 1.5)
+            }
+            .shadow(color: .black.opacity(0.35 * emphasis), radius: 10, y: 4)
     }
 }

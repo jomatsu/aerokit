@@ -56,6 +56,13 @@ public final class ExposePreferences: ObservableObject {
         didSet { defaults.set(showGroupToggleHint, forKey: Keys.showGroupToggleHint) }
     }
 
+    /// After ⇧1–9 or a drag moves a window to another workspace: follow it
+    /// there (switch workspace, dismiss the overview) instead of staying in
+    /// the overview.
+    @Published public var followMovedWindow: Bool {
+        didSet { defaults.set(followMovedWindow, forKey: Keys.followMovedWindow) }
+    }
+
     /// Three-finger trackpad swipes: up opens the workspace overview, down
     /// opens app exposé — standing in for the system Mission Control and
     /// App Exposé gestures.
@@ -72,6 +79,7 @@ public final class ExposePreferences: ObservableObject {
         static let groupByApp = "expose.groupByApp"
         static let groupToggleKey = "expose.groupToggleKey"
         static let showGroupToggleHint = "expose.showGroupToggleHint"
+        static let followMovedWindow = "expose.followMovedWindow"
         static let threeFingerSwipe = "expose.threeFingerSwipe"
     }
 
@@ -84,6 +92,7 @@ public final class ExposePreferences: ObservableObject {
         let storedToggleKey = defaults.string(forKey: Keys.groupToggleKey)?.uppercased().first
         groupToggleKey = storedToggleKey.map(String.init) ?? "0"
         showGroupToggleHint = defaults.object(forKey: Keys.showGroupToggleHint) as? Bool ?? true
+        followMovedWindow = defaults.bool(forKey: Keys.followMovedWindow)
         threeFingerSwipe = defaults.object(forKey: Keys.threeFingerSwipe) as? Bool ?? true
     }
 }

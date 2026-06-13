@@ -33,6 +33,8 @@ final class AppCoordinator {
         swipe = SwipeController(client: client) { [switcher] workspace in
             switcher.snapshotImage(for: workspace)
         }
+        // So does the exposé's drag-to-workspace drop bar.
+        expose.workspacePreview = switcher.workspacePreview
     }
 
     func start() {

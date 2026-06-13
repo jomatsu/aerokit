@@ -13,15 +13,19 @@ final class AeroSpaceClientFocusTests: XCTestCase {
 
     func testParsesWindowsAndScreenNumber() throws {
         let runner = StubRunner(output: """
-        101\(us)com.apple.Safari\(us)Safari\(us)Apple\(us)2
-        102\(us)com.mitchellh.ghostty\(us)Ghostty\(us)tmux\(us)2
+        101\(us)com.apple.Safari\(us)Safari\(us)Apple\(us)2\(us)3
+        102\(us)com.mitchellh.ghostty\(us)Ghostty\(us)tmux\(us)2\(us)3
         """)
 
         let snapshot = try makeClient(runner).focusedWorkspaceWindows()
 
         XCTAssertEqual(snapshot.windows, [
-            ExposeWindow(id: 101, bundleIdentifier: "com.apple.Safari", appName: "Safari", title: "Apple"),
-            ExposeWindow(id: 102, bundleIdentifier: "com.mitchellh.ghostty", appName: "Ghostty", title: "tmux")
+            ExposeWindow(
+                id: 101, bundleIdentifier: "com.apple.Safari", appName: "Safari", title: "Apple", workspace: "3"
+            ),
+            ExposeWindow(
+                id: 102, bundleIdentifier: "com.mitchellh.ghostty", appName: "Ghostty", title: "tmux", workspace: "3"
+            )
         ])
         XCTAssertEqual(snapshot.screenNumber, 2)
         XCTAssertEqual(runner.calls.first, [
@@ -31,9 +35,19 @@ final class AeroSpaceClientFocusTests: XCTestCase {
                 "%{app-bundle-id}",
                 "%{app-name}",
                 "%{window-title}",
-                "%{monitor-appkit-nsscreen-screens-id}"
+                "%{monitor-appkit-nsscreen-screens-id}",
+                "%{workspace}"
             ].joined(separator: us)
         ])
+    }
+
+    func testMissingWorkspaceColumnYieldsEmptyWorkspace() throws {
+        // Older aerospace builds can emit fewer columns than requested.
+        let runner = StubRunner(output: "101\(us)com.apple.Safari\(us)Safari\(us)Apple\(us)2")
+
+        let snapshot = try makeClient(runner).focusedWorkspaceWindows()
+
+        XCTAssertEqual(snapshot.windows.first?.workspace, "")
     }
 
     func testSkipsMalformedLines() throws {
@@ -150,6 +164,24 @@ final class AeroSpaceClientFocusTests: XCTestCase {
         XCTAssertEqual(runner.calls, [
             ["move-node-to-workspace", "--focus-follows-window", "--window-id", "7", "2"]
         ])
+    }
+
+    // MARK: - moveWindow / closeWindow
+
+    func testMoveWindowDoesNotFollowFocus() throws {
+        let runner = StubRunner(output: "")
+
+        try makeClient(runner).moveWindow(id: 7, toWorkspace: "3")
+
+        XCTAssertEqual(runner.calls, [["move-node-to-workspace", "--window-id", "7", "3"]])
+    }
+
+    func testCloseWindowPassesWindowID() throws {
+        let runner = StubRunner(output: "")
+
+        try makeClient(runner).closeWindow(id: 7)
+
+        XCTAssertEqual(runner.calls, [["close", "--window-id", "7"]])
     }
 
     // MARK: - focusedWorkspaceName

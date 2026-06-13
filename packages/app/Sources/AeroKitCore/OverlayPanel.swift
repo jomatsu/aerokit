@@ -4,6 +4,9 @@ import AppKit
 /// into: it becomes key without activating the app so keyboard input works
 /// while the previous app keeps focus.
 public final class OverlayPanel: NSPanel {
+    /// Receives `keyDown` and ⌘-modified key-equivalent events alike.
+    /// Return true to consume; note that returning false for a key
+    /// equivalent can re-deliver the same event through `keyDown`.
     public var keyHandler: ((NSEvent) -> Bool)?
     public var onResignKey: (() -> Void)?
 
@@ -37,6 +40,15 @@ public final class OverlayPanel: NSPanel {
             return
         }
         super.keyDown(with: event)
+    }
+
+    /// ⌘-modified keys arrive here instead of `keyDown`; route them to the
+    /// same handler so overlays can bind key equivalents like ⌘W.
+    override public func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if keyHandler?(event) == true {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     override public func resignKey() {

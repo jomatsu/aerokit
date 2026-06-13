@@ -167,7 +167,8 @@ public final class AeroSpaceClient: Sendable {
             "%{app-bundle-id}",
             "%{app-name}",
             "%{window-title}",
-            "%{monitor-appkit-nsscreen-screens-id}"
+            "%{monitor-appkit-nsscreen-screens-id}",
+            "%{workspace}"
         ]
 
         var snapshot = WorkspaceSnapshot(windows: [])
@@ -179,7 +180,8 @@ public final class AeroSpaceClient: Sendable {
                 id: id,
                 bundleIdentifier: fields[1],
                 appName: fields[2],
-                title: fields[3]
+                title: fields[3],
+                workspace: fields.count > 5 ? fields[5] : ""
             ))
             snapshot.screenNumber = snapshot.screenNumber ?? Int(fields[4])
         }
@@ -206,6 +208,17 @@ public final class AeroSpaceClient: Sendable {
         _ = try run([
             "move-node-to-workspace", "--focus-follows-window", "--window-id", String(id), workspace
         ])
+    }
+
+    /// Moves a window to a workspace without following it — unlike
+    /// `summonWindow`, deliberately no `--focus-follows-window`: the exposé
+    /// overlay stays up after the move and focus must not leave it.
+    public func moveWindow(id: CGWindowID, toWorkspace workspace: String) throws {
+        _ = try run(["move-node-to-workspace", "--window-id", String(id), workspace])
+    }
+
+    public func closeWindow(id: CGWindowID) throws {
+        _ = try run(["close", "--window-id", String(id)])
     }
 
     // MARK: - Parsing

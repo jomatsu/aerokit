@@ -42,6 +42,12 @@ public final class ExposeController {
     /// the pad) and re-evaluates it whenever this fires.
     public var onSwipePreferenceChanged: (() -> Void)?
 
+    /// Snapshot lookup for the drag-to-workspace drop bar, injected by the
+    /// coordinator (the switcher owns the snapshot store). Sendable so the
+    /// presentation's background hop can load previews — a cold cache means
+    /// per-workspace disk decodes that must not block the main actor.
+    public var workspacePreview: @Sendable (String) -> NSImage? = { _ in nil }
+
     public var wantsSwipeGestures: Bool {
         preferences.threeFingerSwipe
     }
@@ -58,6 +64,13 @@ public final class ExposeController {
         overlay.onMove = { [weak self] move in self?.session?.move(move) }
         overlay.onHover = { [weak self] index in self?.session?.select(index) }
         overlay.onToggleGrouping = { [weak self] in self?.toggleGrouping() }
+        overlay.onCloseSelected = { [weak self] in self?.closeSelected() }
+        overlay.onMoveSelectedToWorkspace = { [weak self] workspace in
+            self?.moveSelected(toWorkspace: workspace)
+        }
+        overlay.onMoveToWorkspace = { [weak self] id, workspace in
+            self?.moveWindow(id: id, toWorkspace: workspace)
+        }
         overlay.groupToggleKey = preferences.groupToggleCharacter
         digitInterceptor.onDigit = { [weak self] digit in self?.quickSelectDigit(digit) }
 
@@ -159,6 +172,8 @@ public final class ExposeController {
         var snapshot: WorkspaceSnapshot
         var focusedWindowID: CGWindowID?
         var bounds: [CGWindowID: CGRect]
+        var workspaceTargets: [WorkspaceTarget] = []
+        var workspacePreviews: [String: NSImage] = [:]
     }
 
     private func present(scope: ExposeScope) {
@@ -172,13 +187,14 @@ public final class ExposeController {
     private func runPresentation(epoch: Int, scope: ExposeScope) async {
         let client = client
         let capturer = capturer
+        let preview = workspacePreview
         // One background hop for the blocking CLI and WindowServer queries.
         let context = await Task.detached(priority: .userInitiated) { () -> PresentationContext? in
             switch scope {
             case .workspace:
-                await Self.workspaceContext(client: client, capturer: capturer)
+                await Self.workspaceContext(client: client, capturer: capturer, preview: preview)
             case .app:
-                await Self.appContext(client: client, capturer: capturer)
+                await Self.appContext(client: client, capturer: capturer, preview: preview)
             }
         }.value
 
@@ -197,7 +213,9 @@ public final class ExposeController {
             bounds: context.bounds,
             focusedWindowID: context.focusedWindowID,
             icons: icons(for: windows),
-            groupByApp: scope == .workspace && preferences.groupByApp
+            groupByApp: scope == .workspace && preferences.groupByApp,
+            workspaceTargets: context.workspaceTargets,
+            workspacePreviews: context.workspacePreviews
         )
         self.session = session
         overlay.show(
@@ -230,19 +248,26 @@ public final class ExposeController {
 
     private nonisolated static func workspaceContext(
         client: AeroSpaceClient,
-        capturer: WindowImageCapturer
+        capturer: WindowImageCapturer,
+        preview: @escaping @Sendable (String) -> NSImage?
     ) async -> PresentationContext? {
-        // The focused-window query only seeds the initial selection, so
-        // run it concurrently instead of paying a second CLI round trip
-        // before the overlay can show.
+        // The focused-window query only seeds the initial selection, and
+        // the drop-bar content is invisible until a drag starts, so both
+        // run concurrently instead of paying extra CLI round trips before
+        // the overlay can show.
         async let focused = client.focusedWindow()
+        async let dropBar = loadDropBarContent(preview: preview) {
+            try client.workspacesOnFocusedMonitor(includeEmpty: true)
+        }
         guard let snapshot = loadSnapshot("workspace", { try client.focusedWorkspaceWindows() }) else {
             return nil
         }
         return await PresentationContext(
             snapshot: snapshot,
             focusedWindowID: focused?.id,
-            bounds: capturer.windowBoundsByID()
+            bounds: capturer.windowBoundsByID(),
+            workspaceTargets: dropBar.targets,
+            workspacePreviews: dropBar.previews
         )
     }
 
@@ -250,11 +275,16 @@ public final class ExposeController {
     /// determines which windows to list.
     private nonisolated static func appContext(
         client: AeroSpaceClient,
-        capturer: WindowImageCapturer
+        capturer: WindowImageCapturer,
+        preview: @escaping @Sendable (String) -> NSImage?
     ) async -> PresentationContext? {
         // The bounds query talks to the WindowServer, not the CLI, so it can
-        // overlap the dependent CLI round trips.
+        // overlap the dependent CLI round trips; the drop-bar content is
+        // invisible until a drag starts, so it loads concurrently too.
         async let bounds = capturer.windowBoundsByID()
+        // The app's windows span monitors, so every workspace is a valid
+        // drop target.
+        async let dropBar = loadDropBarContent(preview: preview) { try client.listWorkspaces() }
         guard let focused = client.focusedWindow() else {
             fputs("AeroKit: app exposé: no focused window\n", stderr)
             return nil
@@ -270,8 +300,29 @@ public final class ExposeController {
         return await PresentationContext(
             snapshot: snapshot,
             focusedWindowID: focused.id,
-            bounds: bounds
+            bounds: bounds,
+            workspaceTargets: dropBar.targets,
+            workspacePreviews: dropBar.previews
         )
+    }
+
+    /// The drop bar's workspaces and their snapshot previews (workspaces
+    /// the switcher has not snapshotted yet simply get a placeholder).
+    /// Empty (logged) on CLI failure — the overlay shows no drop bar.
+    private nonisolated static func loadDropBarContent(
+        preview: @Sendable (String) -> NSImage?,
+        _ list: () throws -> [(name: String, isFocused: Bool)]
+    ) -> (targets: [WorkspaceTarget], previews: [String: NSImage]) {
+        do {
+            let targets = try list().map { WorkspaceTarget(name: $0.name, isFocused: $0.isFocused) }
+            let previews = targets.reduce(into: [String: NSImage]()) { previews, target in
+                previews[target.name] = preview(target.name)
+            }
+            return (targets, previews)
+        } catch {
+            fputs("AeroKit: listing workspaces failed: \(error)\n", stderr)
+            return ([], [:])
+        }
     }
 
     /// nil (logged) on CLI failure, nil on an empty listing — neither shows
@@ -457,13 +508,96 @@ public final class ExposeController {
         }
         let id = session.tiles[index].window.id
         dismiss()
+        runDetached(failureLabel: "focusing window \(id)") {
+            try $0.focusWindow(id: id)
+        }
+    }
 
+    // MARK: - Window operations
+
+    /// The keyboard operations' subject; nil while the overview is closed
+    /// or the selection points at nothing.
+    private var selectedWindowID: CGWindowID? {
+        guard let session, session.tiles.indices.contains(session.selectedIndex) else {
+            return nil
+        }
+        return session.tiles[session.selectedIndex].id
+    }
+
+    /// ⌘W: close the selected window. The overview stays up for the next
+    /// operation; only the closed window's tile leaves.
+    private func closeSelected() {
+        guard let id = selectedWindowID else {
+            return
+        }
+        removeWindow(id: id, failureLabel: "closing window \(id)") {
+            try $0.closeWindow(id: id)
+        }
+    }
+
+    /// ⇧1–9: send the selected window to the workspace named by the digit.
+    private func moveSelected(toWorkspace workspace: String) {
+        guard let id = selectedWindowID else {
+            return
+        }
+        moveWindow(id: id, toWorkspace: workspace)
+    }
+
+    /// Shared by the keyboard and the drag-and-drop paths. A move to the
+    /// window's own workspace is a no-op so a sloppy drop doesn't eat the
+    /// tile. With "follow moved window" on, the overview closes and the
+    /// move switches to the destination workspace; off, the overview stays
+    /// up for the next operation.
+    private func moveWindow(id: CGWindowID, toWorkspace workspace: String) {
+        guard let session, let tile = session.tiles.first(where: { $0.id == id }),
+              tile.window.workspace != workspace
+        else {
+            return
+        }
+        if preferences.followMovedWindow {
+            dismiss()
+            runDetached(failureLabel: "moving window \(id) to \(workspace)") {
+                try $0.summonWindow(id: id, toWorkspace: workspace)
+            }
+        } else {
+            removeWindow(id: id, failureLabel: "moving window \(id) to \(workspace)") {
+                try $0.moveWindow(id: id, toWorkspace: workspace)
+            }
+        }
+    }
+
+    /// Optimistic removal in the `activate` mold: the tile leaves and the
+    /// grid re-flows immediately, the command runs fire-and-forget. A failed
+    /// command leaves a missing tile, which the next presentation corrects.
+    private func removeWindow(
+        id: CGWindowID,
+        failureLabel: String,
+        command: @escaping @Sendable (AeroSpaceClient) throws -> Void
+    ) {
+        guard let session else {
+            return
+        }
+        withAnimation(.spring(response: 0.32, dampingFraction: 1)) {
+            session.removeTile(windowID: id)
+        }
+        if session.tiles.isEmpty {
+            dismiss()
+        }
+        runDetached(failureLabel: failureLabel, command)
+    }
+
+    /// Fire-and-forget AeroSpace command off the main actor, stderr-logged
+    /// on failure — the mold every overlay-triggered command shares.
+    private func runDetached(
+        failureLabel: String,
+        _ command: @escaping @Sendable (AeroSpaceClient) throws -> Void
+    ) {
         let client = client
         Task.detached(priority: .userInitiated) {
             do {
-                try client.focusWindow(id: id)
+                try command(client)
             } catch {
-                fputs("AeroKit: focusing window \(id) failed: \(error)\n", stderr)
+                fputs("AeroKit: \(failureLabel) failed: \(error)\n", stderr)
             }
         }
     }
