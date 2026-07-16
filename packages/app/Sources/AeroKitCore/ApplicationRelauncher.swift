@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 
+private let log = AppLog(category: "core")
+
 public enum ApplicationRelauncher {
     @MainActor
     public static func relaunch() {
@@ -13,7 +15,7 @@ public enum ApplicationRelauncher {
         do {
             try process.run()
         } catch {
-            fputs("Failed to relaunch application: \(error)\n", stderr)
+            log.error("failed to relaunch application: \(error)")
             return
         }
 

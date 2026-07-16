@@ -4,6 +4,8 @@ import Combine
 import Foundation
 import SwiftUI
 
+private let log = AppLog(category: "swipe")
+
 /// Turns horizontal three-finger gestures into AeroSpace workspace switches
 /// with a finger-attached HUD: the workspace strip appears as the gesture
 /// begins, its selection follows the fingers, and the switch commits when
@@ -230,7 +232,7 @@ public final class SwipeController {
                 do {
                     try client.switchToWorkspace(plan.target)
                 } catch {
-                    fputs("AeroKit: swipe workspace switch failed: \(error)\n", stderr)
+                    log.error("swipe workspace switch failed: \(error)")
                 }
             }.value
         }
@@ -253,7 +255,7 @@ public final class SwipeController {
                 current: current
             )
         } catch {
-            fputs("AeroKit: swipe workspace listing failed: \(error)\n", stderr)
+            log.error("swipe workspace listing failed: \(error)")
             return nil
         }
     }
@@ -271,7 +273,7 @@ public final class SwipeController {
                     WorkspaceApp.uniqueApps(from: windows).compactMap(resolver.icon(for:))
                 }
         } catch {
-            fputs("AeroKit: swipe window listing failed: \(error)\n", stderr)
+            log.error("swipe window listing failed: \(error)")
             return [:]
         }
     }

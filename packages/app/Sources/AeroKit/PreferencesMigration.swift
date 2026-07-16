@@ -1,4 +1,5 @@
 import Foundation
+import SwitcherFeature
 
 /// One-time copy of AeroSwitcher-era preferences into the AeroKit domain so
 /// the unification doesn't reset anyone's hotkeys or refresh settings.
@@ -21,6 +22,11 @@ enum PreferencesMigration {
     ]
 
     static func migrateIfNeeded(into defaults: UserDefaults = .standard) {
+        // The marker below only guards the defaults copy; the snapshot folder
+        // move must run for everyone, including users who migrated defaults
+        // long ago and would otherwise leave captures under ~/Pictures.
+        SnapshotLocationMigration.migrateIfNeeded()
+
         guard !defaults.bool(forKey: markerKey) else {
             return
         }

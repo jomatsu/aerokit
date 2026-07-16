@@ -30,6 +30,8 @@ struct SwitcherSettingsView: View {
                 frequencyRow
                 SettingsDivider()
                 lastUpdatedRow
+                SettingsDivider()
+                excludeAppsRow
             }
 
             if let message = model.lastErrorMessage {
@@ -153,6 +155,19 @@ struct SwitcherSettingsView: View {
                 .help("Refresh previews now")
                 .disabled(!model.screenCaptureGranted)
             }
+        }
+    }
+
+    private var excludeAppsRow: some View {
+        SettingsRow(
+            title: "Exclude Apps",
+            subtitle: "App names or bundle IDs, comma-separated — their windows are never saved"
+        ) {
+            TextField("1Password, com.apple.Passwords", text: $preferences.snapshotExcludedApps)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .frame(width: 220)
+                .font(.system(size: 11))
         }
     }
 

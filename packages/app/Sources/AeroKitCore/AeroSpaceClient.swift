@@ -44,9 +44,10 @@ public final class AeroSpaceClient: Sendable {
         self.runner = runner
     }
 
-    /// Locates the aerospace CLI across common install locations, falling
-    /// back to the Homebrew path GUI apps can't always find via PATH.
-    public static func detectExecutablePath() -> String {
+    /// Locates the aerospace CLI across common install locations, including
+    /// the Homebrew paths GUI apps can't always find via PATH. nil when no
+    /// aerospace binary exists at any known location.
+    public static func detectInstalledExecutablePath() -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         var candidates = [
             "/opt/homebrew/bin/aerospace",
@@ -61,7 +62,12 @@ public final class AeroSpaceClient: Sendable {
         }
 
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-            ?? "/opt/homebrew/bin/aerospace"
+    }
+
+    /// The install path when present, else the Homebrew default so callers
+    /// always have a concrete path to spawn.
+    public static func detectExecutablePath() -> String {
+        detectInstalledExecutablePath() ?? "/opt/homebrew/bin/aerospace"
     }
 
     // MARK: - Workspaces
@@ -253,5 +259,26 @@ public final class AeroSpaceClient: Sendable {
             parentContainerLayout: fields.count > 6 ? fields[6] : "",
             workspaceRootContainerLayout: fields.count > 7 ? fields[7] : ""
         )
+    }
+}
+
+/// Settings-pane diagnosis of the AeroSpace side of the world.
+public enum AeroSpaceHealth: Equatable, Sendable {
+    /// The server answered a command.
+    case running
+    /// The CLI binary exists but no command succeeded — the server is
+    /// most likely not running.
+    case installedNotRunning
+    case notInstalled
+}
+
+public extension AeroSpaceClient {
+    /// Blocking round trip (fast socket path, CLI fallback); call off
+    /// the main actor.
+    func checkHealth() -> AeroSpaceHealth {
+        if (try? listWorkspaces()) != nil {
+            return .running
+        }
+        return Self.detectInstalledExecutablePath() == nil ? .notInstalled : .installedNotRunning
     }
 }

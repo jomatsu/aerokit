@@ -34,4 +34,14 @@ final class AppPreferencesTests: XCTestCase {
 
         XCTAssertFalse(AppPreferences(defaults: defaults).preselectNextOnOpen)
     }
+
+    func testSnapshotExclusionsTrimsCasesAndDropsEmptyTokens() {
+        let preferences = AppPreferences(defaults: defaults)
+
+        preferences.snapshotExcludedApps = " 1Password ,\ncom.apple.Passwords, "
+        XCTAssertEqual(preferences.snapshotExclusions, ["1password", "com.apple.passwords"])
+
+        preferences.snapshotExcludedApps = ""
+        XCTAssertEqual(preferences.snapshotExclusions, [])
+    }
 }

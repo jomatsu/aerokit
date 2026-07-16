@@ -6,6 +6,9 @@ public struct SwitcherConfiguration: Sendable {
     public var snapshotRootPath: String
     public var snapshotRequestDirectoryPath: String
     public var snapshotRequestFilePath: String
+    /// Sort priority for the switcher's workspace grid: listed names come
+    /// first in this order, everything else follows in natural order. Purely
+    /// cosmetic — snapshots cover whatever AeroSpace reports.
     public var workspaceOrder: [String]
     public var columns: Int
     public var maxAppIcons: Int
@@ -24,7 +27,7 @@ public struct SwitcherConfiguration: Sendable {
     public init(
         aerospacePath: String = AeroSpaceClient.detectExecutablePath(),
         snapshotRootPath: String =
-            "\(FileManager.default.homeDirectoryForCurrentUser.path)/Pictures/AeroSpace Workspaces",
+            "\(FileManager.default.homeDirectoryForCurrentUser.path)/Library/Application Support/AeroKit/Workspace Snapshots",
         snapshotRequestDirectoryPath: String =
             "\(FileManager.default.homeDirectoryForCurrentUser.path)/Library/Caches/AeroSpaceWorkspaceSnapshots",
         snapshotRequestFilePath: String =

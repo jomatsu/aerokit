@@ -61,6 +61,12 @@ public final class AppPreferences: ObservableObject {
         didSet { defaults.set(refreshFrequency.rawValue, forKey: Keys.refreshFrequency) }
     }
 
+    /// Comma- or newline-separated app names / bundle ids whose windows never
+    /// enter saved snapshots (password managers, banking apps, …).
+    @Published public var snapshotExcludedApps: String {
+        didSet { defaults.set(snapshotExcludedApps, forKey: Keys.excludedApps) }
+    }
+
     /// cmd-tab style: releasing the trigger modifier commits the selection.
     /// Off, the overlay stays open until Return/click/quick-select.
     @Published public var switchOnRelease: Bool {
@@ -102,6 +108,7 @@ public final class AppPreferences: ObservableObject {
     private enum Keys {
         static let autoRefresh = "snapshot.autoRefresh"
         static let refreshFrequency = "snapshot.refreshFrequency"
+        static let excludedApps = "snapshot.excludedApps"
         static let switchOnRelease = "switcher.switchOnRelease"
         static let preselectNextOnOpen = "switcher.preselectNextOnOpen"
         static let hideEmptyWorkspaces = "switcher.hideEmptyWorkspaces"
@@ -117,6 +124,7 @@ public final class AppPreferences: ObservableObject {
         autoRefresh = defaults.object(forKey: Keys.autoRefresh) as? Bool ?? true
         refreshFrequency = defaults.string(forKey: Keys.refreshFrequency)
             .flatMap(SnapshotRefreshFrequency.init) ?? .every3Minutes
+        snapshotExcludedApps = defaults.string(forKey: Keys.excludedApps) ?? ""
         switchOnRelease = defaults.bool(forKey: Keys.switchOnRelease)
         // Pre-selection used to be implied by switchOnRelease; inherit it for
         // existing cmd-tab-style users and pin it immediately so the two
@@ -135,5 +143,15 @@ public final class AppPreferences: ObservableObject {
         hotKey = HotKeySpec.load(from: defaults, key: Keys.hotKey) ?? .default
         refreshShortcut = HotKeySpec.load(from: defaults, key: Keys.refreshShortcut) ?? .defaultRefresh
         settingsShortcut = HotKeySpec.load(from: defaults, key: Keys.settingsShortcut) ?? .defaultSettings
+    }
+
+    /// Lowercased match tokens parsed from `snapshotExcludedApps`.
+    public var snapshotExclusions: Set<String> {
+        Set(
+            snapshotExcludedApps
+                .split(whereSeparator: { $0 == "," || $0.isNewline })
+                .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                .filter { !$0.isEmpty }
+        )
     }
 }

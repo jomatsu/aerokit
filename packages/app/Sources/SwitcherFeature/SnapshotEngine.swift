@@ -11,7 +11,7 @@ public enum SnapshotEngineError: Error, CustomStringConvertible {
     public var description: String {
         switch self {
         case .noWorkspaces:
-            "No workspaces configured for snapshots"
+            "AeroSpace reported no workspaces to snapshot"
         case .nothingCaptured:
             "No windows captured"
         case let .outputDirectoryUnavailable(path):
@@ -85,15 +85,33 @@ public final class SnapshotEngine: Sendable {
 
     /// Runs a full snapshot refresh and returns the promoted `current` directory.
     /// `onProgress` reports (completedWindows, totalWindows) as captures finish.
-    public func refresh(onProgress: (@Sendable (Int, Int) -> Void)? = nil) async throws -> URL {
-        let workspaces = configuration.workspaceOrder
+    public func refresh(
+        excluding excludedApps: Set<String> = [],
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> URL {
+        // Snapshot whatever workspaces AeroSpace actually reports — names
+        // are user configuration, so a hardcoded list would silently skip
+        // everything a differently-configured user has. Empty workspaces
+        // stay in the list so they get a placeholder overview.
+        let listing = try await listWorkspacesAndWindows()
+        let workspaces = listing.workspaces
         guard !workspaces.isEmpty else {
             throw SnapshotEngineError.noWorkspaces
         }
 
+        // A window can still report a workspace missing from the listing
+        // (moved mid-refresh); drop it rather than write into a directory
+        // that was never created.
         let selectedWorkspaces = Set(workspaces)
-        let windows = try await listWindows()
+        let windows = listing.windows
             .filter { selectedWorkspaces.contains($0.workspace) }
+            // Sensitive apps opted out of snapshots must be dropped before
+            // capture — they are never captured, written, listed in the
+            // manifest, or composed into an overview.
+            .filter { window in
+                !excludedApps.contains(window.appName.lowercased())
+                    && !excludedApps.contains(window.bundleIdentifier.lowercased())
+            }
 
         let rootURL = URL(fileURLWithPath: configuration.snapshotRootPath, isDirectory: true)
         let runID = Self.runIDFormatter.string(from: Date())
@@ -429,10 +447,13 @@ public final class SnapshotEngine: Sendable {
 
     // MARK: - Helpers
 
-    private func listWindows() async throws -> [WorkspaceWindow] {
+    /// One background hop for both blocking CLI round trips.
+    private func listWorkspacesAndWindows() async throws -> (workspaces: [String], windows: [WorkspaceWindow]) {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .utility).async { [client] in
-                continuation.resume(with: Result { try client.listWindows() })
+                continuation.resume(with: Result {
+                    (try client.listWorkspaces().map(\.name), try client.listWindows())
+                })
             }
         }
     }

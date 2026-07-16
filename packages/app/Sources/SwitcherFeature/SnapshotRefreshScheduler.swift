@@ -154,10 +154,11 @@ public final class SnapshotRefreshScheduler {
         lastStartedAt = Date()
         onRefreshStarted?()
 
+        let exclusions = preferences.snapshotExclusions
         Task { @MainActor [engine] in
             let result: Result<URL?, any Error>
             do {
-                result = try await .success(engine.refresh { completed, total in
+                result = try await .success(engine.refresh(excluding: exclusions) { completed, total in
                     Task { @MainActor [weak self] in
                         self?.onRefreshProgress?(completed, total)
                     }

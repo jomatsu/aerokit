@@ -5,6 +5,8 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
+private let log = AppLog(category: "expose")
+
 /// What one overlay presentation shows: the focused workspace's windows
 /// (mission-control-like) or the focused app's windows from every workspace
 /// (app-exposé-like).
@@ -144,7 +146,7 @@ public final class ExposeController {
             )
             return nil
         } catch {
-            fputs("AeroKit: exposé hotkey \(spec.displayKeys.joined()) registration failed: \(error)\n", stderr)
+            log.error("exposé hotkey \(spec.displayKeys.joined()) registration failed: \(error)")
             return spec.registrationFailureMessage
         }
     }
@@ -286,7 +288,7 @@ public final class ExposeController {
         // drop target.
         async let dropBar = loadDropBarContent(preview: preview) { try client.listWorkspaces() }
         guard let focused = client.focusedWindow() else {
-            fputs("AeroKit: app exposé: no focused window\n", stderr)
+            log.error("app exposé: no focused window")
             return nil
         }
         guard var snapshot = loadSnapshot("app", {
@@ -320,7 +322,7 @@ public final class ExposeController {
             }
             return (targets, previews)
         } catch {
-            fputs("AeroKit: listing workspaces failed: \(error)\n", stderr)
+            log.error("listing workspaces failed: \(error)")
             return ([], [:])
         }
     }
@@ -335,7 +337,7 @@ public final class ExposeController {
             let snapshot = try list()
             return snapshot.windows.isEmpty ? nil : snapshot
         } catch {
-            fputs("AeroKit: listing \(label) windows failed: \(error)\n", stderr)
+            log.error("listing \(label) windows failed: \(error)")
             return nil
         }
     }
@@ -347,12 +349,12 @@ public final class ExposeController {
         guard AccessibilityPermission.isGranted else {
             if !warnedAccessibilityMissing {
                 warnedAccessibilityMissing = true
-                fputs("AeroKit: option+digit quick select is on but Accessibility access is missing\n", stderr)
+                log.error("option+digit quick select is on but Accessibility access is missing")
             }
             return
         }
         if !digitInterceptor.start() {
-            fputs("AeroKit: could not install the option+digit event tap\n", stderr)
+            log.error("could not install the option+digit event tap")
         }
     }
 
@@ -597,7 +599,7 @@ public final class ExposeController {
             do {
                 try command(client)
             } catch {
-                fputs("AeroKit: \(failureLabel) failed: \(error)\n", stderr)
+                log.error("\(failureLabel) failed: \(error)")
             }
         }
     }

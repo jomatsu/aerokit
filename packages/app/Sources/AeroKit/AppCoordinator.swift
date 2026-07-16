@@ -5,6 +5,8 @@ import Foundation
 import SwipeFeature
 import SwitcherFeature
 
+private let log = AppLog(category: "app")
+
 /// Owns the pieces every feature shares — the Carbon hotkey center, the
 /// status bar item, the trackpad monitor, and the settings window — and
 /// routes events to the switcher, exposé, and swipe controllers.
@@ -24,6 +26,9 @@ final class AppCoordinator {
 
     init() {
         PreferencesMigration.migrateIfNeeded()
+        // Converts the LaunchAgent earlier releases wrote into an
+        // SMAppService login item; idempotent and cheap after the first run.
+        LaunchAtLogin.migrateIfNeeded()
 
         client = AeroSpaceClient(executablePath: AeroSpaceClient.detectExecutablePath())
         switcher = SwitcherController(hotKeyCenter: hotKeyCenter)
@@ -84,7 +89,7 @@ final class AppCoordinator {
         if wanted {
             running = swipeMonitor.start()
             if !running {
-                fputs("AeroKit: trackpad swipe monitor failed to start\n", stderr)
+                log.error("trackpad swipe monitor failed to start")
             }
         } else {
             swipeMonitor.stop()
@@ -96,6 +101,7 @@ final class AppCoordinator {
     func showSettings() {
         if settingsWindow == nil {
             settingsWindow = SettingsWindowController(
+                client: client,
                 switcherPane: switcher.makeSettingsPane(),
                 exposePane: expose.makeSettingsPane(),
                 swipePane: swipe.makeSettingsPane()
@@ -116,7 +122,7 @@ final class AppCoordinator {
                 do {
                     return try client.focusedWorkspaceName()
                 } catch {
-                    fputs("AeroKit: reading focused workspace failed: \(error)\n", stderr)
+                    log.error("reading focused workspace failed: \(error)")
                     return nil
                 }
             }.value
@@ -129,7 +135,7 @@ final class AppCoordinator {
                     do {
                         try client.summonWindow(id: windowID, toWorkspace: workspace)
                     } catch {
-                        fputs("AeroKit: summoning settings window failed: \(error)\n", stderr)
+                        log.error("summoning settings window failed: \(error)")
                     }
                 }.value
             }

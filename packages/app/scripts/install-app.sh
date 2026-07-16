@@ -11,8 +11,10 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
-LAUNCH_AGENT="$LAUNCH_AGENT_DIR/$BUNDLE_ID.plist"
-LOG_DIR="$HOME/Library/Logs/$APP_NAME"
+
+# Keep the bundle's version in lockstep with the single source in AppVersion.swift.
+VERSION="$(sed -n 's/.*static let current = "\([^"]*\)".*/\1/p' "$ROOT_DIR/Sources/AeroKitCore/AppVersion.swift")"
+VERSION="${VERSION:-0.0.0}"
 
 cd "$ROOT_DIR"
 
@@ -20,7 +22,7 @@ swift build -c release --product "$APP_NAME"
 BIN_DIR="$(swift build -c release --show-bin-path)"
 BINARY="$BIN_DIR/$APP_NAME"
 
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$LAUNCH_AGENT_DIR" "$LOG_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BINARY" "$MACOS_DIR/$APP_NAME"
@@ -40,7 +42,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>$VERSION</string>
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>LSMinimumSystemVersion</key>
@@ -80,33 +82,10 @@ for OLD_APP in AeroSwitcher AeroExpose; do
   rm -rf "$INSTALL_DIR/$OLD_APP.app"
 done
 
-cat > "$LAUNCH_AGENT" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$BUNDLE_ID</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/open</string>
-    <string>-g</string>
-    <string>$APP_DIR</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>$LOG_DIR/stdout.log</string>
-  <key>StandardErrorPath</key>
-  <string>$LOG_DIR/stderr.log</string>
-</dict>
-</plist>
-PLIST
-
-launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT" >/dev/null 2>&1 || true
+# The app manages launch-at-login itself via SMAppService and migrates any
+# pre-existing com.nasubikun.aerokit LaunchAgent on first launch, so the
+# installer no longer writes one — it just (re)launches the fresh copy.
 /usr/bin/pkill -x "$APP_NAME" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT"
-launchctl kickstart -k "gui/$(id -u)/$BUNDLE_ID"
+/usr/bin/open -g "$APP_DIR"
 
 echo "$APP_DIR"

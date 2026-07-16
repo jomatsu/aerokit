@@ -1,5 +1,7 @@
 import Foundation
 
+private let log = AppLog(category: "core")
+
 /// Reads and writes the macOS "Mission Control" and "App Exposé" trackpad
 /// gesture checkboxes (System Settings → Trackpad → More Gestures). Both
 /// live in the Dock's preference domain, and the Dock only rereads them on
@@ -34,7 +36,7 @@ public enum SystemSwipeGestures {
         do {
             _ = try ProcessRunner().run("/usr/bin/killall", arguments: ["Dock"])
         } catch {
-            fputs("AeroKit: restarting the Dock failed: \(error)\n", stderr)
+            log.error("restarting the Dock failed: \(error)")
         }
     }
 }

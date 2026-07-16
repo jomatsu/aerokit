@@ -15,6 +15,11 @@ private func postAndExit(_ name: Notification.Name) -> Never {
     exit(0)
 }
 
+if CommandLine.arguments.contains("--version") {
+    print("AeroKit \(AppVersion.current)")
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--open-settings") {
     postAndExit(AeroKitNotification.openSettings)
 }
@@ -33,6 +38,24 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var observers: [any NSObjectProtocol] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Two instances would register duplicate Carbon hotkeys and event
+        // taps. LaunchServices dedups `open` launches of the same bundle;
+        // this catches raw-binary or second-copy launches it doesn't see.
+        let current = NSRunningApplication.current
+        let duplicate = NSWorkspace.shared.runningApplications.contains { app in
+            guard app.processIdentifier != current.processIdentifier else { return false }
+            if let bundleID = Bundle.main.bundleIdentifier {
+                return app.bundleIdentifier == bundleID
+            }
+            // Raw-binary runs (swift run / .build) have no bundle identifier;
+            // match by executable name instead.
+            return app.executableURL?.lastPathComponent == "AeroKit"
+        }
+        if duplicate {
+            fputs("AeroKit: another instance is already running; exiting\n", stderr)
+            exit(0)
+        }
+
         NSApp.setActivationPolicy(.accessory)
         // A launcher may have started us hidden (`open -j`); a hidden app
         // shows no windows at all, so the exposé overlay and the swipe HUD

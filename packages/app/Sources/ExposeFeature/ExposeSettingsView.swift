@@ -1,6 +1,8 @@
 import AeroKitCore
 import SwiftUI
 
+private let log = AppLog(category: "expose")
+
 struct ExposeSettingsView: View {
     @ObservedObject var model: ExposeSettingsModel
     @ObservedObject var preferences: ExposePreferences
@@ -182,7 +184,7 @@ final class ExposeSettingsModel: ObservableObject {
             do {
                 try SystemSwipeGestures.setEnabled(enabled)
             } catch {
-                fputs("AeroKit: updating system swipe gestures failed: \(error)\n", stderr)
+                log.error("updating system swipe gestures failed: \(error)")
                 await MainActor.run {
                     self.systemGestureErrorMessage = "Could not change the system swipe gestures."
                     self.refreshSystemGestures()

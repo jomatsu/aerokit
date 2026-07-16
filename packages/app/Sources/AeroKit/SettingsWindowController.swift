@@ -19,12 +19,13 @@ final class SettingsWindowController {
     private var activationObserver: (any NSObjectProtocol)?
 
     init(
+        client: AeroSpaceClient,
         switcherPane: some View,
         exposePane: some View,
         swipePane: some View,
         onWillShow: @escaping () -> Void
     ) {
-        let general = GeneralSettingsModel()
+        let general = GeneralSettingsModel(client: client)
         content = AeroKitSettingsView(
             generalModel: general,
             switcherPane: AnyView(switcherPane),

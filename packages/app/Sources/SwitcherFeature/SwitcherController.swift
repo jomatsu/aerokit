@@ -4,6 +4,8 @@ import Carbon
 import Combine
 import SwiftUI
 
+private let log = AppLog(category: "switcher")
+
 @MainActor
 public final class SwitcherController {
     private let configuration: SwitcherConfiguration
@@ -163,7 +165,7 @@ public final class SwitcherController {
     }
 
     private func logError(_ message: String) {
-        fputs("\(message)\n", stderr)
+        log.error(message)
     }
 }
 
