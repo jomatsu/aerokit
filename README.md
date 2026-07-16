@@ -24,7 +24,7 @@ a Cmd-Tab-style **workspace switcher** with snapshot previews, and an Exposé-st
 Build and install from source:
 
 ```sh
-git clone https://github.com/Nasubikun/aerokit.git
+git clone https://github.com/jomatsu/aerokit.git
 cd aerokit/packages/app
 scripts/install-app.sh
 ```
@@ -32,9 +32,9 @@ scripts/install-app.sh
 This builds a release binary, wraps it into `~/Applications/AeroKit.app`, and
 registers a LaunchAgent so it starts at login.
 
-<!-- TODO: once the Homebrew tap is live:
+<!-- TODO: enable after the first signed release:
 ```sh
-brew install --cask nasubikun/tap/aerokit
+brew install --cask jomatsu/tap/aerokit
 ```
 -->
 
@@ -58,6 +58,9 @@ make check      # lint + build + test
 ```
 
 Formatting and linting rules are shared across packages via the root `.swiftformat` and `.swiftlint.yml`.
+
+Release maintainers should follow [`docs/releasing.md`](docs/releasing.md) for
+Developer ID signing, notarization, GitHub Releases, and Homebrew tap updates.
 
 ## License
 
