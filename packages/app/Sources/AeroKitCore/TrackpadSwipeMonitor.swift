@@ -379,9 +379,9 @@ public enum SwipeEvent: Equatable, Sendable {
     /// Signed progress along the locked axis: +1.0 is the travel a slow
     /// swipe needs to commit one step, toward the right or top of the pad.
     case moved(SwipeAxis, progress: Float)
-    /// The fingers lifted. `steps` is the committed step count (negative
-    /// means left or down); 0 means the gesture cancelled — pulled back or
-    /// too short.
+    /// The fingers lifted. `steps` is the committed step count, clamped to
+    /// one step per gesture (negative means left or down); 0 means the
+    /// gesture cancelled — pulled back or too short.
     case ended(SwipeAxis, steps: Int)
 
     public var axis: SwipeAxis {
@@ -395,10 +395,11 @@ public enum SwipeEvent: Equatable, Sendable {
 /// Turns raw contact frames into three-finger gesture events, modeled on how
 /// macOS's own gesture engine behaves: thresholds are physical millimeters
 /// so every pad size feels alike, the swipe axis locks early in the gesture,
-/// all three fingers must move together before it engages, and at release a
-/// fast flick commits from a shorter distance than a slow drag. Runs on the
-/// MultitouchSupport callback thread; the lock keeps frames from concurrent
-/// callbacks from interleaving.
+/// all three fingers must move together before it engages, at release a
+/// fast flick commits from a shorter distance than a slow drag, and — like
+/// the system's Spaces swipe — one gesture commits at most one step. Runs
+/// on the MultitouchSupport callback thread; the lock keeps frames from
+/// concurrent callbacks from interleaving.
 final class SwipeDetector: @unchecked Sendable {
     /// Travel after which the swipe axis locks to the dominant direction.
     private static let axisLockDistanceMM: Float = 3
@@ -635,15 +636,22 @@ final class SwipeDetector: @unchecked Sendable {
     /// dropping a step there.
     private func steps(progress: Float, speed: Float) -> Int {
         let epsilon: Float = 0.0001
+        let decided: Int
         if speed >= Self.flickSpeedMM {
-            return Int((progress - epsilon).rounded(.up))
+            decided = Int((progress - epsilon).rounded(.up))
+        } else if speed <= -Self.flickSpeedMM {
+            decided = Int((progress + epsilon).rounded(.down))
+        } else {
+            // Half-way releases round away from zero, so the bias follows
+            // the travel's sign.
+            let bias: Float = progress >= 0 ? epsilon : -epsilon
+            decided = Int((progress + bias).rounded())
         }
-        if speed <= -Self.flickSpeedMM {
-            return Int((progress + epsilon).rounded(.down))
-        }
-        // Half-way releases round away from zero, so the bias follows the
-        // travel's sign.
-        let bias: Float = progress >= 0 ? epsilon : -epsilon
-        return Int((progress + bias).rounded())
+        // One gesture, one step, like the system's Spaces swipe. A step is
+        // 35 mm by default on a ~120 mm-wide pad, so an ordinary swipe's
+        // travel alone already spans two to three steps — scrubbing that
+        // into multi-step commits made single swipes land unpredictably
+        // far. Moving further is a repeat swipe.
+        return max(-1, min(1, decided))
     }
 }

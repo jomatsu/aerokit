@@ -90,14 +90,16 @@ final class SwipeDetectorTests: XCTestCase {
         assertEvents(frame(fingers: []), [.ended(.vertical, steps: 1)])
     }
 
-    func testLongSwipeCommitsMultipleSteps() {
+    func testLongSwipeStillCommitsOneStep() {
         XCTAssertEqual(frame(fingers: threeFingers(atY: 0.15)), [])
         assertEvents(
             frame(fingers: threeFingers(atY: 0.5)),
             [.began(.vertical), .moved(.vertical, progress: 1.0)]
         )
+        // Two steps of travel: progress keeps reporting the full distance
+        // (the HUD rubber-bands it), but one gesture commits one step.
         assertEvents(frame(fingers: threeFingers(atY: 0.85)), [.moved(.vertical, progress: 2.0)])
-        assertEvents(frame(fingers: []), [.ended(.vertical, steps: 2)])
+        assertEvents(frame(fingers: []), [.ended(.vertical, steps: 1)])
     }
 
     func testSwipeDownCommitsNegativeSteps() {
@@ -199,15 +201,15 @@ final class SwipeDetectorTests: XCTestCase {
         assertEvents(frame(fingers: []), [.ended(.vertical, steps: 1)])
     }
 
-    func testFlickOnALongSwipeCompletesTheStepInProgress() {
+    func testFlickOnALongSwipeStillCommitsOneStep() {
         XCTAssertEqual(frame(fingers: threeFingers(atY: 0.15)), [])
-        // 1.4 steps of travel released as a flick: the commit finishes the
-        // second step, not a third.
+        // 1.4 steps of travel released as a flick: neither the distance nor
+        // the velocity can push a single gesture past one step.
         assertEvents(
             frame(fingers: threeFingers(atY: 0.64), velocity: (0, 4.0)),
             [.began(.vertical), .moved(.vertical, progress: 1.4)]
         )
-        assertEvents(frame(fingers: []), [.ended(.vertical, steps: 2)])
+        assertEvents(frame(fingers: []), [.ended(.vertical, steps: 1)])
     }
 
     func testSmallBackwardDriftDoesNotCancelAPastHalfwayRelease() {
