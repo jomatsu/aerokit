@@ -60,7 +60,7 @@ This builds a release binary and wraps it into `~/Applications/AeroKit.app`. On
 first launch the app registers itself as a login item (System Settings › General
 › Login Items), toggleable from the settings window.
 
-<!-- TODO: once the Homebrew tap is live:
+<!-- TODO: enable after the first signed release:
 ```sh
 brew install --cask jomatsu/tap/aerokit
 ```
@@ -86,6 +86,9 @@ make check      # lint + build + test
 ```
 
 Formatting and linting rules are shared across packages via the root `.swiftformat` and `.swiftlint.yml`.
+
+Release maintainers should follow [`docs/releasing.md`](docs/releasing.md) for
+Developer ID signing, notarization, GitHub Releases, and Homebrew tap updates.
 
 ## License
 

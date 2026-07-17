@@ -93,6 +93,12 @@ installer also retires the pre-unification `AeroSwitcher.app` /
 Grant **Screen Recording** in the settings window when prompted — previews
 need it (the apps still work without it, minus previews).
 
+To build an app bundle without installing or launching it:
+
+```sh
+VERSION=0.1.0 scripts/build-app.sh
+```
+
 CLI entry points for scripting / AeroSpace keybindings:
 
 ```sh
