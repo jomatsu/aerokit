@@ -29,6 +29,14 @@ jobs:
             echo "Release tags must look like v1.2.3: $GITHUB_REF_NAME" >&2
             exit 1
           fi
+          # The binary compiles AppVersion.current into `--version` while
+          # the bundle takes the tag; refuse to ship the two disagreeing.
+          source_version="$(sed -n 's/.*static let current = "\([^"]*\)".*/\1/p' \
+            packages/app/Sources/AeroKitCore/AppVersion.swift)"
+          if [[ "$version" != "$source_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match AppVersion.current ($source_version)" >&2
+            exit 1
+          fi
           source packages/app/scripts/app-metadata.sh
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "APP_NAME=$APP_NAME" >> "$GITHUB_ENV"

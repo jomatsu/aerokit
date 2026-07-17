@@ -48,7 +48,13 @@ that follows the gesture.
 
 ## Install
 
-Build and install from source:
+With Homebrew (signed & notarized universal build):
+
+```sh
+brew install --cask jomatsu/tap/aerokit
+```
+
+Or build and install from source:
 
 ```sh
 git clone https://github.com/jomatsu/aerokit.git
@@ -56,15 +62,10 @@ cd aerokit/packages/app
 scripts/install-app.sh
 ```
 
-This builds a release binary and wraps it into `~/Applications/AeroKit.app`. On
-first launch the app registers itself as a login item (System Settings › General
-› Login Items), toggleable from the settings window.
-
-<!-- TODO: enable after the first signed release:
-```sh
-brew install --cask jomatsu/tap/aerokit
-```
--->
+The from-source install builds a release binary and wraps it into
+`~/Applications/AeroKit.app`. Either way, on first launch the app registers
+itself as a login item (System Settings › General › Login Items), toggleable
+from the settings window.
 
 See [`packages/app`](packages/app) for features, default hotkeys, and CLI flags.
 

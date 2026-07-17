@@ -71,9 +71,12 @@ brew uninstall --cask aerokit
 must provide a Developer ID identity explicitly.
 
 ```sh
-VERSION=0.1.0 \
 ARCHS="arm64 x86_64" \
 OUTPUT_DIR="$PWD/dist" \
 CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
   packages/app/scripts/build-app.sh
 ```
+
+`VERSION` defaults to `AppVersion.current`; the release workflow overrides
+it from the tag and fails when the two disagree, so bump
+`Sources/AeroKitCore/AppVersion.swift` before tagging.

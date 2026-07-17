@@ -6,14 +6,27 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/app-metadata.sh"
 
-VERSION="${VERSION:-0.1.0}"
+# Default to the single version source the binary itself compiles in, so a
+# local build can never disagree with `AeroKit --version`; CI overrides it
+# from the release tag (and separately checks the two match).
+if [[ -z "${VERSION:-}" ]]; then
+  VERSION="$(sed -n 's/.*static let current = "\([^"]*\)".*/\1/p' \
+    "$ROOT_DIR/Sources/AeroKitCore/AppVersion.swift")"
+fi
+VERSION="${VERSION:-0.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 ARCHS="${ARCHS:-$(uname -m)}"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/dist}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+ICON_FILE="$ROOT_DIR/Resources/AppIcon.icns"
 
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
   echo "VERSION must be a semantic version without a leading v: $VERSION" >&2
+  exit 1
+fi
+
+if [[ ! -f "$ICON_FILE" ]]; then
+  echo "App icon is missing: $ICON_FILE" >&2
   exit 1
 fi
 
@@ -57,6 +70,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 install -m 755 "$BINARY" "$MACOS_DIR/$APP_NAME"
+cp "$ICON_FILE" "$RESOURCES_DIR/AppIcon.icns"
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -68,6 +82,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>$APP_NAME</string>
   <key>CFBundleExecutable</key>
   <string>$APP_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key>
