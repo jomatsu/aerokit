@@ -7,10 +7,13 @@ APP_NAME="AeroKit"
 BUNDLE_ID="com.nasubikun.aerokit"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/Applications}"
 APP_DIR="$INSTALL_DIR/$APP_NAME.app"
-CONTENTS_DIR="$APP_DIR/Contents"
-MACOS_DIR="$CONTENTS_DIR/MacOS"
-RESOURCES_DIR="$CONTENTS_DIR/Resources"
+ICON_FILE="$ROOT_DIR/Resources/AppIcon.icns"
 LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
+
+if [[ ! -f "$ICON_FILE" ]]; then
+  echo "error: $ICON_FILE is missing" >&2
+  exit 1
+fi
 
 # Keep the bundle's version in lockstep with the single source in AppVersion.swift.
 VERSION="$(sed -n 's/.*static let current = "\([^"]*\)".*/\1/p' "$ROOT_DIR/Sources/AeroKitCore/AppVersion.swift")"
@@ -22,10 +25,21 @@ swift build -c release --product "$APP_NAME"
 BIN_DIR="$(swift build -c release --show-bin-path)"
 BINARY="$BIN_DIR/$APP_NAME"
 
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
-rm -rf "$APP_DIR"
+# Assemble the bundle in a staging directory next to its destination (same
+# volume, so the final move is atomic) and swap it in only once complete: a
+# failure mid-assembly must neither leave a half-written AeroKit.app nor
+# have deleted the working install it was replacing.
+mkdir -p "$INSTALL_DIR"
+STAGING_DIR="$(mktemp -d "$INSTALL_DIR/.$APP_NAME.staging.XXXXXX")"
+trap 'rm -rf "$STAGING_DIR"' EXIT
+STAGED_APP="$STAGING_DIR/$APP_NAME.app"
+CONTENTS_DIR="$STAGED_APP/Contents"
+MACOS_DIR="$CONTENTS_DIR/MacOS"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
+
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BINARY" "$MACOS_DIR/$APP_NAME"
+cp "$ICON_FILE" "$RESOURCES_DIR/AppIcon.icns"
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -39,6 +53,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -65,9 +81,9 @@ if command -v codesign >/dev/null 2>&1; then
     )"
   fi
   if [[ -n "$CODESIGN_IDENTITY" ]]; then
-    codesign --force --deep --sign "$CODESIGN_IDENTITY" "$APP_DIR" >/dev/null
+    codesign --force --deep --sign "$CODESIGN_IDENTITY" "$STAGED_APP" >/dev/null
   else
-    codesign --force --deep --sign - "$APP_DIR" >/dev/null
+    codesign --force --deep --sign - "$STAGED_APP" >/dev/null
   fi
 fi
 
@@ -86,6 +102,8 @@ done
 # pre-existing com.nasubikun.aerokit LaunchAgent on first launch, so the
 # installer no longer writes one — it just (re)launches the fresh copy.
 /usr/bin/pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+rm -rf "$APP_DIR"
+mv "$STAGED_APP" "$APP_DIR"
 /usr/bin/open -g "$APP_DIR"
 
 echo "$APP_DIR"
