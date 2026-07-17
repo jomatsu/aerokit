@@ -379,9 +379,9 @@ public enum SwipeEvent: Equatable, Sendable {
     /// Signed progress along the locked axis: +1.0 is the travel a slow
     /// swipe needs to commit one step, toward the right or top of the pad.
     case moved(SwipeAxis, progress: Float)
-    /// The fingers lifted. `steps` is the committed step count, clamped to
-    /// one step per gesture (negative means left or down); 0 means the
-    /// gesture cancelled — pulled back or too short.
+    /// The fingers lifted. `steps` is the committed step count (negative
+    /// means left or down); 0 means the gesture cancelled — pulled back or
+    /// too short.
     case ended(SwipeAxis, steps: Int)
 
     public var axis: SwipeAxis {
@@ -395,23 +395,24 @@ public enum SwipeEvent: Equatable, Sendable {
 /// Turns raw contact frames into three-finger gesture events, modeled on how
 /// macOS's own gesture engine behaves: thresholds are physical millimeters
 /// so every pad size feels alike, the swipe axis locks early in the gesture,
-/// all three fingers must move together before it engages, at release a
-/// fast flick commits from a shorter distance than a slow drag, and — like
-/// the system's Spaces swipe — one gesture commits at most one step. Runs
-/// on the MultitouchSupport callback thread; the lock keeps frames from
-/// concurrent callbacks from interleaving.
+/// all three fingers must move together before it engages, and at release a
+/// fast flick commits from a shorter distance than a slow drag. Runs on the
+/// MultitouchSupport callback thread; the lock keeps frames from concurrent
+/// callbacks from interleaving.
 final class SwipeDetector: @unchecked Sendable {
     /// Travel after which the swipe axis locks to the dominant direction.
     private static let axisLockDistanceMM: Float = 3
     /// How decisively one axis must beat the other to lock; until then a
     /// diagonal wobble keeps the gesture undecided rather than guessing.
     private static let axisDominanceRatio: Float = 1.2
-    /// Release speed (mm/s along the locked axis) that reads as a
-    /// deliberate flick. Below it the lift-off velocity is ignored —
-    /// MultitouchSupport's final contact frames commonly report small
-    /// spurious velocities as the fingers peel off the pad — and the
-    /// outcome comes from position alone.
-    private static let flickSpeedMM: Float = 120
+    /// Seconds of post-release coasting credited to the commit: the
+    /// fingers' release velocity projects this far ahead, so a flick
+    /// commits the step it was clearly headed for while the residual drift
+    /// of a careful drag barely moves the projection.
+    private static let momentumProjectionSeconds: Float = 0.15
+    /// Momentum may add at most one step beyond the travelled distance, so
+    /// a violent flick cannot fly past what the fingers actually did.
+    private static let momentumStepCap: Float = 1.0
     /// Every finger must itself travel this far in the swipe direction
     /// before the axis can lock; splaying or pinching fingers can move the
     /// centroid without anyone having swiped.
@@ -625,33 +626,17 @@ final class SwipeDetector: @unchecked Sendable {
         return [.ended(axis, steps: 0)]
     }
 
-    /// Decides the commit like a native page swipe. A sub-threshold release
-    /// commits the step nearest the fingers — exactly the card a progress
-    /// UI highlights at that moment, so display and outcome cannot
-    /// diverge. A deliberate flick completes the step the fingers were
-    /// headed for in the flick's direction, from however short a distance —
-    /// but never more: no release velocity carries the commit past the
-    /// next step boundary, and none cancels a boundary already reached.
-    /// The epsilon keeps float noise at an exact boundary from leaking or
-    /// dropping a step there.
     private func steps(progress: Float, speed: Float) -> Int {
-        let epsilon: Float = 0.0001
-        let decided: Int
-        if speed >= Self.flickSpeedMM {
-            decided = Int((progress - epsilon).rounded(.up))
-        } else if speed <= -Self.flickSpeedMM {
-            decided = Int((progress + epsilon).rounded(.down))
-        } else {
-            // Half-way releases round away from zero, so the bias follows
-            // the travel's sign.
-            let bias: Float = progress >= 0 ? epsilon : -epsilon
-            decided = Int((progress + bias).rounded())
-        }
-        // One gesture, one step, like the system's Spaces swipe. A step is
-        // 35 mm by default on a ~120 mm-wide pad, so an ordinary swipe's
-        // travel alone already spans two to three steps — scrubbing that
-        // into multi-step commits made single swipes land unpredictably
-        // far. Moving further is a repeat swipe.
-        return max(-1, min(1, decided))
+        // Project the release velocity ahead like scroll-view deceleration:
+        // momentum carries a flick into the step it was headed for, and an
+        // opposing throw-back naturally subtracts toward a cancel.
+        let momentum = speed * Self.momentumProjectionSeconds / stepDistanceMM
+        let projected = progress + max(-Self.momentumStepCap, min(Self.momentumStepCap, momentum))
+        // Round to nearest so the gesture commits whatever step its
+        // projection is closest to — what a progress UI shows under the
+        // fingers at release. The epsilon keeps float noise from flipping
+        // exact-half-way releases toward zero.
+        let epsilon: Float = projected >= 0 ? 0.0001 : -0.0001
+        return Int((projected + epsilon).rounded())
     }
 }

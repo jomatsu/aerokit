@@ -145,17 +145,9 @@ public final class SwipeController {
 
     /// The strip is ordered left to right. With natural direction the
     /// content follows the fingers, so fingers moving left (negative
-    /// progress) reveal the workspace on the right. One gesture commits at
-    /// most one step, so travel past a full card rubber-bands (same 0.25
-    /// factor as the strip's ends) instead of gliding on — the highlight
-    /// only ever sits where the release can land.
+    /// progress) reveal the workspace on the right.
     private func displayOffset(_ progress: Float) -> CGFloat {
-        let raw = CGFloat(preferences.naturalDirection ? -progress : progress)
-        guard abs(raw) > 1 else {
-            return raw
-        }
-        let softened = 1 + (abs(raw) - 1) * 0.25
-        return raw < 0 ? -softened : softened
+        CGFloat(preferences.naturalDirection ? -progress : progress)
     }
 
     private func beginGesture() {
@@ -260,15 +252,6 @@ public final class SwipeController {
                 wrapAround: wrapAround
             )
             .flatMap { $0.target != ring.current ? $0 : nil }
-
-            // Counterpart of the per-gesture "swipe ring" line: what this
-            // release decided, so a reported wrong landing is diagnosable
-            // from the unified log alone.
-            if let plan {
-                log.notice("swipe commit: \(ring.current) → \(plan.target) (steps: \(steps))")
-            } else {
-                log.notice("swipe commit: cancelled (steps: \(steps), current: \(ring.current))")
-            }
 
             if showHUD, let self {
                 hud.settle(

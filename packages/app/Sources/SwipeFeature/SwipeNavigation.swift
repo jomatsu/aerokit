@@ -45,9 +45,8 @@ public enum SwipeNavigation {
         return ring
     }
 
-    /// A signed move along the ring. The swipe commits one step per
-    /// gesture, but the arithmetic stays general. Without wrap-around the
-    /// move clamps at the ring's ends.
+    /// A multi-workspace move: one long swipe can land several entries away.
+    /// Without wrap-around the move clamps at the ring's ends.
     public static func plan(
         current: String,
         workspaces: [String],
