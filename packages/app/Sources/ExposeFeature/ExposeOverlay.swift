@@ -218,7 +218,14 @@ final class ExposeOverlay {
     // swiftlint:enable cyclomatic_complexity
 
     private func handleCharacterKey(_ event: NSEvent) {
-        guard let character = event.charactersIgnoringModifiers?.first else {
+        // ⌥/⌃ combos are never quick-select input: ⌥digit belongs to the
+        // event tap when it is installed and to AeroSpace's own workspace
+        // bindings when it is not — acting on the bare character here would
+        // select a tile on top of whichever of those fired. Swallowed
+        // without acting, like every other unbound key.
+        guard event.modifierFlags.isDisjoint(with: [.option, .control]),
+              let character = event.charactersIgnoringModifiers?.first
+        else {
             return
         }
         if String(character).uppercased() == String(groupToggleKey).uppercased() {

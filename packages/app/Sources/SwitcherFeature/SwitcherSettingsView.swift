@@ -136,7 +136,7 @@ struct SwitcherSettingsView: View {
     private var autoRefreshRow: some View {
         SettingsRow(
             title: "Auto Refresh",
-            subtitle: "Capture previews in the background"
+            subtitle: "Capture previews in the background — turning this off deletes stored previews"
         ) {
             SettingsToggle(isOn: $preferences.autoRefresh)
         }

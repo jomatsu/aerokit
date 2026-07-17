@@ -19,8 +19,10 @@ public final class SwipeController {
     private let settingsModel = SwipeSettingsModel()
     private let hud = SwipeHUD()
     /// Cached workspace snapshot lookup (the switcher's store) for the
-    /// HUD's thumbnail cards; nil images just render placeholders.
-    private let workspacePreview: (String) -> NSImage?
+    /// HUD's thumbnail cards; nil images just render placeholders. Sendable
+    /// so the gesture's background hop can decode cold-cache thumbnails off
+    /// the main actor, right as the finger-tracking animation starts.
+    private let workspacePreview: @Sendable (String) -> NSImage?
     /// Thumbnails resolved for the gesture in flight, reused at settle.
     private var currentPreviews: [String: NSImage] = [:]
     private let iconResolver = AppIconResolver()
@@ -63,7 +65,7 @@ public final class SwipeController {
     public init(
         client: AeroSpaceClient,
         workspaceOrder: WorkspaceOrderStore,
-        workspacePreview: @escaping (String) -> NSImage? = { _ in nil }
+        workspacePreview: @escaping @Sendable (String) -> NSImage? = { _ in nil }
     ) {
         self.client = client
         workspaceOrderStore = workspaceOrder
@@ -145,33 +147,41 @@ public final class SwipeController {
         let client = client
         let skipEmpty = preferences.skipEmpty
         let order = workspaceOrderStore.order
+        let showHUD = preferences.showHUD
+        let preview = workspacePreview
         let previousCommit = commitTask
         ringTask = Task { [weak self] in
             // The previous gesture's switch must land before this ring is
             // read, or AeroSpace still reports the old focused workspace.
             await previousCommit?.value
-            let ring = await BlockingWork.run { () -> Ring? in
-                Self.loadRing(client: client, skipEmpty: skipEmpty, order: order)
+            let loaded = await BlockingWork.run { () -> (ring: Ring, previews: [String: NSImage])? in
+                guard let ring = Self.loadRing(client: client, skipEmpty: skipEmpty, order: order) else {
+                    return nil
+                }
+                // The store caches decoded thumbnails, so this is disk-bound
+                // once per snapshot refresh at most — but that cold decode
+                // belongs here, off the main actor, not under the HUD's
+                // first animation frame.
+                let previews = showHUD
+                    ? ring.workspaces.reduce(into: [String: NSImage]()) { $0[$1] = preview($1) }
+                    : [:]
+                return (ring: ring, previews: previews)
             }
-            guard let ring, let self, preferences.showHUD else {
-                return ring
+            guard let loaded, let self, showHUD else {
+                return loaded?.ring
             }
-            // The store caches decoded thumbnails, so this is disk-bound
-            // once per snapshot refresh at most.
-            currentPreviews = ring.workspaces.reduce(into: [:]) { previews, name in
-                previews[name] = workspacePreview(name)
-            }
+            currentPreviews = loaded.previews
             // Bring the HUD up mid-gesture as soon as the ring is known.
             if gestureActive {
                 hud.beginInteractive(
-                    workspaces: ring.workspaces,
-                    current: ring.current,
+                    workspaces: loaded.ring.workspaces,
+                    current: loaded.ring.current,
                     previews: currentPreviews,
                     wrapsAround: preferences.wrapAround
                 )
                 hud.setOffset(latestOffset)
             }
-            return ring
+            return loaded.ring
         }
 
         // App icons load alongside the ring, off the main thread (cache

@@ -81,7 +81,14 @@ public final class SwitcherController {
         settingsModel.refreshStatus()
         refreshWorkspacesAsync()
         observePreferences()
-        showOnboardingIfNeeded()
+    }
+
+    /// True when the settings window should open on launch: previews need a
+    /// missing Screen Recording grant, or a failed hotkey registration left
+    /// the switcher unreachable. Read after `start()` — that's what
+    /// registers the hotkey. The app shell aggregates every feature's flag.
+    public var needsOnboarding: Bool {
+        !ScreenCapturePermission.isGranted || settingsModel.hotKeyErrorMessage != nil
     }
 
     private func showSettings() {
@@ -97,15 +104,9 @@ public final class SwitcherController {
         settingsModel.refreshStatus()
     }
 
-    /// Cached overview snapshot for other features' previews (the swipe HUD
-    /// thumbnails); nil when the workspace was never captured.
-    public func snapshotImage(for workspace: String) -> NSImage? {
-        snapshotStore.snapshotImage(for: workspace)
-    }
-
     /// Sendable snapshot lookup for features that load previews off the
-    /// main actor (the exposé drop bar); captures only the locking store,
-    /// so cold-cache disk decodes never block presentation.
+    /// main actor (the exposé drop bar, the swipe HUD); captures only the
+    /// locking store, so cold-cache disk decodes never block presentation.
     public nonisolated var workspacePreview: @Sendable (String) -> NSImage? {
         { [snapshotStore] workspace in
             snapshotStore.snapshotImage(for: workspace)
@@ -243,8 +244,16 @@ extension SwitcherController {
         snapshotScheduler.onRefreshProgress = { [weak self] completed, total in
             self?.feedbackCoordinator.markProgress(completed: completed, total: total)
         }
-        snapshotScheduler.onRefreshFinished = { [weak self] _ in
-            self?.feedbackCoordinator.markFinished()
+        snapshotScheduler.onRefreshFinished = { [weak self] _, reason in
+            guard let self else { return }
+            feedbackCoordinator.markFinished()
+            // A background run in flight when auto-refresh was switched off
+            // outlives the toggle's purge; its promoted captures must not
+            // resurrect what the user just deleted. Explicit requests
+            // (refresh button, menu) keep their result regardless.
+            if !preferences.autoRefresh, reason != .request {
+                deleteSnapshotsFromDisk()
+            }
         }
         snapshotScheduler.onRefreshFailed = { [weak self] message in
             self?.feedbackCoordinator.markFailed(message)
@@ -281,22 +290,25 @@ extension SwitcherController {
             .sink { [weak self] _ in self?.refreshWorkspacesAsync() }
             .store(in: &cancellables)
 
+        // Captured previews are recognizable window images plus a manifest
+        // of window titles; they must not outlive the user's intent. Turning
+        // auto-refresh off cancels queued captures and deletes the on-disk
+        // tree — the refresh button recreates it on demand.
+        preferences.$autoRefresh.dropFirst()
+            .removeDuplicates()
+            .filter { !$0 }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                snapshotScheduler.cancelPending()
+                deleteSnapshotsFromDisk()
+            }
+            .store(in: &cancellables)
+
         // Reordering in either settings pane re-sorts the grid right away.
         workspaceOrderStore.$order.dropFirst()
             .removeDuplicates()
             .sink { [weak self] _ in self?.refreshWorkspacesAsync() }
             .store(in: &cancellables)
-    }
-
-    private func showOnboardingIfNeeded() {
-        // A failed hotkey registration leaves the app unreachable, so it
-        // warrants the settings window just like a missing permission.
-        guard !ScreenCapturePermission.isGranted || settingsModel.hotKeyErrorMessage != nil else {
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.showSettings()
-        }
     }
 }
 
@@ -471,6 +483,27 @@ extension SwitcherController {
         }
 
         return true
+    }
+
+    /// Removes every stored capture (images and the title manifest). The
+    /// overlay and the swipe HUD fall back to placeholders on their next
+    /// lookup; a manual refresh recreates the tree.
+    private func deleteSnapshotsFromDisk() {
+        presentationCache = nil
+        let rootPath = configuration.snapshotRootPath
+        performInBackground {
+            do {
+                try FileManager.default.removeItem(atPath: rootPath)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                // Nothing captured yet — already the state the purge wants.
+            }
+        } then: { result in
+            if case let .failure(error) = result {
+                self.logError("Failed to delete previews: \(error)")
+            }
+            self.settingsModel.refreshStatus()
+            self.updateOverlayIfVisible()
+        }
     }
 
     private func prewarmSnapshotCache() {

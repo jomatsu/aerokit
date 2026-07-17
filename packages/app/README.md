@@ -74,8 +74,9 @@ them under Settings → Switcher → Exclude Apps (app names or bundle IDs,
 comma-separated). Excluded windows are never captured or listed in the
 manifest.
 
-Turning off automatic refresh in Settings stops all captures; deleting the
-folder above removes every stored image.
+Turning off automatic refresh in Settings stops all captures **and deletes
+the stored previews**; the manual refresh button recreates them on demand.
+`scripts/uninstall-app.sh --purge` removes them together with the app.
 
 ## Install
 

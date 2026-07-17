@@ -36,12 +36,15 @@ final class AppCoordinator {
         client = AeroSpaceClient(executablePath: AeroSpaceClient.detectExecutablePath())
         switcher = SwitcherController(hotKeyCenter: hotKeyCenter, workspaceOrder: workspaceOrder)
         expose = ExposeController(client: client, hotKeyCenter: hotKeyCenter)
-        // The swipe HUD reuses the switcher's workspace snapshots as its
-        // thumbnail previews.
-        swipe = SwipeController(client: client, workspaceOrder: workspaceOrder) { [switcher] workspace in
-            switcher.snapshotImage(for: workspace)
-        }
-        // So does the exposé's drag-to-workspace drop bar.
+        // The swipe HUD and the exposé's drag-to-workspace drop bar both
+        // reuse the switcher's workspace snapshots as thumbnail previews;
+        // the Sendable lookup lets each feature decode them off the main
+        // actor.
+        swipe = SwipeController(
+            client: client,
+            workspaceOrder: workspaceOrder,
+            workspacePreview: switcher.workspacePreview
+        )
         expose.workspacePreview = switcher.workspacePreview
     }
 
@@ -80,6 +83,21 @@ final class AppCoordinator {
         expose.onSwipePreferenceChanged = { [weak self] in self?.updateSwipeMonitor() }
         swipe.onSwipePreferenceChanged = { [weak self] in self?.updateSwipeMonitor() }
         updateSwipeMonitor()
+        showOnboardingIfNeeded()
+    }
+
+    /// First-run affordance: a feature missing a permission (Screen
+    /// Recording, Accessibility) or a failed hotkey registration is
+    /// explained inline in its settings pane, so surface the settings
+    /// window when any feature raises its flag. Checked after the features
+    /// started — that's when hotkeys registered and the flags are accurate.
+    private func showOnboardingIfNeeded() {
+        guard switcher.needsOnboarding || expose.needsOnboarding else {
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.showSettings()
+        }
     }
 
     /// The monitor runs while any feature wants trackpad swipes and stops

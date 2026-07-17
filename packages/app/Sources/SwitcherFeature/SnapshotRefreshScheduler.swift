@@ -7,7 +7,11 @@ public final class SnapshotRefreshScheduler {
     public var onRequestReceived: ((SnapshotReason) -> Void)?
     public var onRefreshStarted: (() -> Void)?
     public var onRefreshProgress: ((Int, Int) -> Void)?
-    public var onRefreshFinished: ((URL?) -> Void)?
+    /// Carries the reason that triggered the run so the consumer can tell a
+    /// user-requested refresh from a background one — a background run that
+    /// finishes after auto-refresh was turned off must not have its captures
+    /// kept, while an explicit request keeps them regardless.
+    public var onRefreshFinished: ((URL?, SnapshotReason?) -> Void)?
     public var onRefreshFailed: ((String) -> Void)?
 
     private let configuration: SwitcherConfiguration
@@ -102,6 +106,17 @@ public final class SnapshotRefreshScheduler {
         return schedule(reason: .request, force: true)
     }
 
+    /// Drops the debounce timer and any queued follow-up. Turning
+    /// auto-refresh off must also cancel work already scheduled: `schedule`
+    /// guards new requests, but an armed timer would still fire
+    /// `startRefresh` and recapture right after the purge.
+    public func cancelPending() {
+        debounceTimer?.invalidate()
+        debounceTimer = nil
+        pendingReason = nil
+        queuedReason = nil
+    }
+
     @discardableResult
     private func schedule(reason: SnapshotReason, force: Bool) -> Bool {
         guard force || preferences.autoRefresh else {
@@ -176,7 +191,7 @@ public final class SnapshotRefreshScheduler {
         switch result {
         case let .success(directory):
             retryAfterFailureAt = Date.distantPast
-            onRefreshFinished?(directory)
+            onRefreshFinished?(directory, triggeringReason)
         case let .failure(error):
             retryAfterFailureAt = Date().addingTimeInterval(configuration.snapshotFailureBackoff)
             onRefreshFailed?("\(error)")

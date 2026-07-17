@@ -54,6 +54,18 @@ public final class ExposeController {
         preferences.threeFingerSwipe
     }
 
+    /// True when the settings window should open on launch: ⌥-digit quick
+    /// select is enabled (the default) but lacks the Accessibility grant it
+    /// needs — the feature would otherwise silently do nothing — or a
+    /// failed hotkey registration left an overview unreachable. Read after
+    /// `start()` — that's what registers the hotkeys. The app shell
+    /// aggregates every feature's flag.
+    public var needsOnboarding: Bool {
+        preferences.modifierQuickSelect && !AccessibilityPermission.isGranted
+            || settingsModel.hotKeyErrorMessage != nil
+            || settingsModel.appHotKeyErrorMessage != nil
+    }
+
     public init(client: AeroSpaceClient, hotKeyCenter: HotKeyCenter) {
         self.client = client
         self.hotKeyCenter = hotKeyCenter
