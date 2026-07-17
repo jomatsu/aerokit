@@ -101,6 +101,52 @@ public final class AeroSpaceClient: Sendable {
         _ = try run(["workspace", name])
     }
 
+    // MARK: - Key bindings
+
+    /// Workspace name → key combo (e.g. "alt-1") from the config's main-mode
+    /// bindings. A binding counts when any of its commands is a `workspace`
+    /// or `summon-workspace` switch naming a workspace; several combos for
+    /// one workspace keep the one with the fewest modifiers. Unparseable
+    /// output degrades to [:].
+    public func workspaceKeyBindings() throws -> [String: String] {
+        let output = try run(["config", "--get", "mode.main.binding", "--json"])
+        guard let data = output.data(using: .utf8),
+              let bindings = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return [:]
+        }
+
+        var combos: [String: String] = [:]
+        for (combo, command) in bindings {
+            let commands = command as? [String] ?? (command as? String).map { [$0] } ?? []
+            for workspace in commands.compactMap(Self.workspaceSwitchTarget) {
+                if let existing = combos[workspace], Self.comboRank(existing) <= Self.comboRank(combo) {
+                    continue
+                }
+                combos[workspace] = combo
+            }
+        }
+        return combos
+    }
+
+    /// "workspace --auto-back-and-forth 3" → "3", "summon-workspace web" →
+    /// "web"; relative switches ("workspace prev") and other commands
+    /// (including `workspace-back-and-forth`) are nil.
+    private static func workspaceSwitchTarget(_ command: String) -> String? {
+        let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let first = tokens.first, first == "workspace" || first == "summon-workspace",
+              let target = tokens.dropFirst().last(where: { !$0.hasPrefix("--") }),
+              !["prev", "next"].contains(target)
+        else {
+            return nil
+        }
+        return target
+    }
+
+    private static func comboRank(_ combo: String) -> (Int, String) {
+        (combo.count { $0 == "-" }, combo)
+    }
+
     // MARK: - Windows (all workspaces)
 
     public func listWindows() throws -> [WorkspaceWindow] {

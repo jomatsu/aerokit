@@ -6,10 +6,6 @@ public struct SwitcherConfiguration: Sendable {
     public var snapshotRootPath: String
     public var snapshotRequestDirectoryPath: String
     public var snapshotRequestFilePath: String
-    /// Sort priority for the switcher's workspace grid: listed names come
-    /// first in this order, everything else follows in natural order. Purely
-    /// cosmetic — snapshots cover whatever AeroSpace reports.
-    public var workspaceOrder: [String]
     public var columns: Int
     public var maxAppIcons: Int
     public var snapshotSize: CGSize
@@ -32,7 +28,6 @@ public struct SwitcherConfiguration: Sendable {
             "\(FileManager.default.homeDirectoryForCurrentUser.path)/Library/Caches/AeroSpaceWorkspaceSnapshots",
         snapshotRequestFilePath: String =
             "\(FileManager.default.homeDirectoryForCurrentUser.path)/Library/Caches/AeroSpaceWorkspaceSnapshots/request.tsv",
-        workspaceOrder: [String] = ["1", "2", "3", "4", "Q", "W", "E", "R"],
         columns: Int = 4,
         maxAppIcons: Int = 4,
         snapshotSize: CGSize = CGSize(width: 320, height: 180),
@@ -51,7 +46,6 @@ public struct SwitcherConfiguration: Sendable {
         self.snapshotRootPath = snapshotRootPath
         self.snapshotRequestDirectoryPath = snapshotRequestDirectoryPath
         self.snapshotRequestFilePath = snapshotRequestFilePath
-        self.workspaceOrder = workspaceOrder
         self.columns = columns
         self.maxAppIcons = maxAppIcons
         self.snapshotSize = snapshotSize

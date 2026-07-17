@@ -15,6 +15,7 @@ private let log = AppLog(category: "swipe")
 public final class SwipeController {
     private let client: AeroSpaceClient
     private let preferences: SwipePreferences
+    private let workspaceOrderStore: WorkspaceOrderStore
     private let settingsModel = SwipeSettingsModel()
     private let hud = SwipeHUD()
     /// Cached workspace snapshot lookup (the switcher's store) for the
@@ -59,8 +60,13 @@ public final class SwipeController {
         preferences.stepDistanceMM
     }
 
-    public init(client: AeroSpaceClient, workspacePreview: @escaping (String) -> NSImage? = { _ in nil }) {
+    public init(
+        client: AeroSpaceClient,
+        workspaceOrder: WorkspaceOrderStore,
+        workspacePreview: @escaping (String) -> NSImage? = { _ in nil }
+    ) {
         self.client = client
+        workspaceOrderStore = workspaceOrder
         self.workspacePreview = workspacePreview
         preferences = SwipePreferences()
     }
@@ -94,7 +100,13 @@ public final class SwipeController {
 
     /// Settings pane embedded in the unified settings window.
     public func makeSettingsPane() -> some View {
-        SwipeSettingsView(model: settingsModel, preferences: preferences)
+        SwipeSettingsView(
+            model: settingsModel,
+            preferences: preferences,
+            workspaceOrder: workspaceOrderStore
+        ) { [client] in
+            try client.workspaceOrderEntries()
+        }
     }
 
     /// Reflects the shared monitor's state in this feature's settings pane.
@@ -132,13 +144,14 @@ public final class SwipeController {
 
         let client = client
         let skipEmpty = preferences.skipEmpty
+        let order = workspaceOrderStore.order
         let previousCommit = commitTask
         ringTask = Task { [weak self] in
             // The previous gesture's switch must land before this ring is
             // read, or AeroSpace still reports the old focused workspace.
             await previousCommit?.value
             let ring = await BlockingWork.run { () -> Ring? in
-                Self.loadRing(client: client, skipEmpty: skipEmpty)
+                Self.loadRing(client: client, skipEmpty: skipEmpty, order: order)
             }
             guard let ring, let self, preferences.showHUD else {
                 return ring
@@ -242,7 +255,7 @@ public final class SwipeController {
     /// Blocking CLI round trips; the caller runs it on BlockingWork. Returns
     /// nil (logged) when AeroSpace is unreachable or reports no usable
     /// workspace.
-    private nonisolated static func loadRing(client: AeroSpaceClient, skipEmpty: Bool) -> Ring? {
+    private nonisolated static func loadRing(client: AeroSpaceClient, skipEmpty: Bool, order: [String]) -> Ring? {
         do {
             let workspaces = try client.workspacesOnFocusedMonitor(includeEmpty: !skipEmpty)
             // Skipping empty workspaces can drop the focused one (it may
@@ -252,10 +265,13 @@ public final class SwipeController {
             else {
                 return nil
             }
-            return Ring(
-                workspaces: SwipeNavigation.ring(current: current, workspaces: workspaces.map(\.name)),
-                current: current
+            let ring = SwipeNavigation.ring(
+                current: current,
+                workspaces: workspaces.map(\.name),
+                priority: order
             )
+            log.notice("swipe ring: \(ring.joined(separator: " → ")) (current: \(current))")
+            return Ring(workspaces: ring, current: current)
         } catch {
             log.error("swipe workspace listing failed: \(error)")
             return nil

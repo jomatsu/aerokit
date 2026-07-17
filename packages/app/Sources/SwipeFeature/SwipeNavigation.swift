@@ -1,3 +1,4 @@
+import AeroKitCore
 import Foundation
 
 /// Pure workspace-ring arithmetic for the swipe switcher: given the focused
@@ -13,6 +14,20 @@ public enum SwipeNavigation {
             self.workspaces = workspaces
             self.target = target
         }
+    }
+
+    /// Ring ordered by the user's priority list: listed names come first in
+    /// that order, everything else follows in natural order. An empty
+    /// priority keeps the order AeroSpace reported.
+    public static func ring(current: String, workspaces: [String], priority: [String]) -> [String] {
+        guard !priority.isEmpty else {
+            return ring(current: current, workspaces: workspaces)
+        }
+        var ring = workspaces
+        if !ring.contains(current) {
+            ring.append(current)
+        }
+        return WorkspaceOrdering.sorted(ring, priority: priority)
     }
 
     /// `workspaces` may omit `current` (skipping empty workspaces does when

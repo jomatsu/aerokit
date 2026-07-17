@@ -60,4 +60,31 @@ final class SwipeNavigationTests: XCTestCase {
     func testEmptyCurrentProducesNoPlan() {
         XCTAssertNil(SwipeNavigation.plan(current: "", workspaces: workspaces, offset: 1, wrapAround: true))
     }
+
+    // MARK: - Priority ordering
+
+    func testPriorityOrdersListedWorkspacesFirstThenNatural() {
+        let ring = SwipeNavigation.ring(
+            current: "1",
+            workspaces: ["1", "10", "2", "E", "Q", "W"],
+            priority: ["Q", "W", "E"]
+        )
+        XCTAssertEqual(ring, ["Q", "W", "E", "1", "2", "10"])
+    }
+
+    func testEmptyPriorityKeepsListingOrder() {
+        let ring = SwipeNavigation.ring(current: "1", workspaces: ["1", "10", "2"], priority: [])
+        XCTAssertEqual(ring, ["1", "10", "2"])
+    }
+
+    func testPriorityInsertsMissingCurrent() {
+        // Skip-empty dropped the focused workspace "W" from the listing.
+        let ring = SwipeNavigation.ring(current: "W", workspaces: ["1", "2"], priority: ["W", "1"])
+        XCTAssertEqual(ring, ["W", "1", "2"])
+    }
+
+    func testPriorityIgnoresNamesWithoutWorkspace() {
+        let ring = SwipeNavigation.ring(current: "1", workspaces: ["1", "2"], priority: ["Z", "2"])
+        XCTAssertEqual(ring, ["2", "1"])
+    }
 }

@@ -15,6 +15,9 @@ final class AppCoordinator {
     private let hotKeyCenter = HotKeyCenter()
     private let statusBar = StatusBarController()
     private let client: AeroSpaceClient
+    /// One store, two settings panes: the switcher grid and the swipe ring
+    /// share the workspace order.
+    private let workspaceOrder = WorkspaceOrderStore()
     private let switcher: SwitcherController
     private let expose: ExposeController
     private let swipe: SwipeController
@@ -31,11 +34,11 @@ final class AppCoordinator {
         LaunchAtLogin.migrateIfNeeded()
 
         client = AeroSpaceClient(executablePath: AeroSpaceClient.detectExecutablePath())
-        switcher = SwitcherController(hotKeyCenter: hotKeyCenter)
+        switcher = SwitcherController(hotKeyCenter: hotKeyCenter, workspaceOrder: workspaceOrder)
         expose = ExposeController(client: client, hotKeyCenter: hotKeyCenter)
         // The swipe HUD reuses the switcher's workspace snapshots as its
         // thumbnail previews.
-        swipe = SwipeController(client: client) { [switcher] workspace in
+        swipe = SwipeController(client: client, workspaceOrder: workspaceOrder) { [switcher] workspace in
             switcher.snapshotImage(for: workspace)
         }
         // So does the exposé's drag-to-workspace drop bar.

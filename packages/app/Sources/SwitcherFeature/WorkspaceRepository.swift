@@ -1,19 +1,20 @@
 import AeroKitCore
 import Foundation
 
-public final class WorkspaceRepository: @unchecked Sendable {
+public final class WorkspaceRepository: Sendable {
     private let client: AeroSpaceClient
-    private let orderIndex: [String: Int]
 
-    public init(client: AeroSpaceClient, order: [String]) {
+    public init(client: AeroSpaceClient) {
         self.client = client
-        orderIndex = Dictionary(order.enumerated().map { ($1, $0) }) { first, _ in first }
     }
 
-    public func load() throws -> [Workspace] {
+    /// `order` is the user's priority list, captured at call time because
+    /// the settings window can change it while loads run in the background.
+    public func load(order: [String]) throws -> [Workspace] {
         let listings = try client.listWorkspaces()
         let windows = try client.listWindows()
         let windowsByWorkspace = Dictionary(grouping: windows, by: \.workspace)
+        let comparator = WorkspaceOrdering.comparator(priority: order)
 
         return listings
             .map { listing in
@@ -26,24 +27,11 @@ public final class WorkspaceRepository: @unchecked Sendable {
                 )
             }
             .sorted { lhs, rhs in
-                compareWorkspaceNames(lhs.name, rhs.name)
+                comparator(lhs.name, rhs.name)
             }
     }
 
     public func switchToWorkspace(_ name: String) throws {
         try client.switchToWorkspace(name)
-    }
-
-    private func compareWorkspaceNames(_ lhs: String, _ rhs: String) -> Bool {
-        switch (orderIndex[lhs], orderIndex[rhs]) {
-        case let (.some(left), .some(right)):
-            left < right
-        case (.some, .none):
-            true
-        case (.none, .some):
-            false
-        case (.none, .none):
-            lhs.localizedStandardCompare(rhs) == .orderedAscending
-        }
     }
 }

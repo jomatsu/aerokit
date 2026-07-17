@@ -13,6 +13,8 @@ final class SwitcherSettingsModel: ObservableObject {
     @Published private(set) var hotKeyErrorMessage: String?
 
     let preferences: AppPreferences
+    let workspaceOrder: WorkspaceOrderStore
+    let loadWorkspaces: @Sendable () throws -> [WorkspaceOrderEntry]
 
     var onRefreshSnapshots: (() -> Bool)?
     var onHotKeyRecordingChanged: ((Bool) -> Void)?
@@ -23,10 +25,14 @@ final class SwitcherSettingsModel: ObservableObject {
     init(
         configuration: SwitcherConfiguration,
         preferences: AppPreferences,
+        workspaceOrder: WorkspaceOrderStore,
+        loadWorkspaces: @escaping @Sendable () throws -> [WorkspaceOrderEntry],
         snapshotStore: SnapshotStore
     ) {
         self.configuration = configuration
         self.preferences = preferences
+        self.workspaceOrder = workspaceOrder
+        self.loadWorkspaces = loadWorkspaces
         self.snapshotStore = snapshotStore
     }
 

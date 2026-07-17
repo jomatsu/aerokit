@@ -10,6 +10,7 @@ private let log = AppLog(category: "switcher")
 public final class SwitcherController {
     private let configuration: SwitcherConfiguration
     private let preferences: AppPreferences
+    private let workspaceOrderStore: WorkspaceOrderStore
     private let repository: WorkspaceRepository
     private let snapshotStore: SnapshotStore
     private let snapshotScheduler: SnapshotRefreshScheduler
@@ -37,14 +38,16 @@ public final class SwitcherController {
 
     public init(
         configuration: SwitcherConfiguration = SwitcherConfiguration(),
-        hotKeyCenter: HotKeyCenter
+        hotKeyCenter: HotKeyCenter,
+        workspaceOrder: WorkspaceOrderStore
     ) {
         self.configuration = configuration
         self.hotKeyCenter = hotKeyCenter
+        workspaceOrderStore = workspaceOrder
         preferences = AppPreferences()
 
         let client = AeroSpaceClient(executablePath: configuration.aerospacePath)
-        repository = WorkspaceRepository(client: client, order: configuration.workspaceOrder)
+        repository = WorkspaceRepository(client: client)
         snapshotStore = SnapshotStore(
             rootPath: configuration.snapshotRootPath,
             maxThumbnailPixelSize: max(configuration.snapshotSize.width, configuration.snapshotSize.height) * 2
@@ -60,6 +63,8 @@ public final class SwitcherController {
         settingsModel = SwitcherSettingsModel(
             configuration: configuration,
             preferences: preferences,
+            workspaceOrder: workspaceOrder,
+            loadWorkspaces: { try client.workspaceOrderEntries() },
             snapshotStore: snapshotStore
         )
         feedbackCoordinator = SnapshotFeedbackCoordinator(settingsModel: settingsModel)
@@ -275,6 +280,12 @@ extension SwitcherController {
         preferences.$hideEmptyWorkspaces.dropFirst()
             .sink { [weak self] _ in self?.refreshWorkspacesAsync() }
             .store(in: &cancellables)
+
+        // Reordering in either settings pane re-sorts the grid right away.
+        workspaceOrderStore.$order.dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.refreshWorkspacesAsync() }
+            .store(in: &cancellables)
     }
 
     private func showOnboardingIfNeeded() {
@@ -370,8 +381,9 @@ extension SwitcherController {
     }
 
     private func refreshWorkspacesAsync() {
+        let order = workspaceOrderStore.order
         performInBackground { [repository] in
-            try repository.load()
+            try repository.load(order: order)
         } then: { result in
             self.applyWorkspaceRefresh(result)
         }

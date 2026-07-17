@@ -71,6 +71,47 @@ final class AeroSpaceClientTests: XCTestCase {
         )
     }
 
+    // MARK: - workspaceKeyBindings
+
+    func testWorkspaceKeyBindingsParsesWorkspaceSwitchCommands() throws {
+        let runner = StubRunner(output: """
+        {
+          "alt-1" : "workspace 1",
+          "alt-e" : "summon-workspace Claude",
+          "alt-shift-1" : "move-node-to-workspace 1",
+          "alt-q" : ["exec-and-forget open -a Safari", "workspace Q"],
+          "alt-b" : "workspace-back-and-forth",
+          "alt-left" : "workspace --wrap-around prev",
+          "alt-right" : "workspace --wrap-around next"
+        }
+        """)
+        let client = AeroSpaceClient(executablePath: "/usr/bin/true", runner: runner)
+
+        let bindings = try client.workspaceKeyBindings()
+
+        XCTAssertEqual(bindings, ["1": "alt-1", "Q": "alt-q", "Claude": "alt-e"])
+        let invocation = try XCTUnwrap(runner.invocations.first)
+        XCTAssertEqual(invocation.arguments, ["config", "--get", "mode.main.binding", "--json"])
+    }
+
+    func testWorkspaceKeyBindingsPreferFewestModifiersAndSkipOptions() throws {
+        let runner = StubRunner(output: """
+        {
+          "alt-shift-2" : "workspace 2",
+          "alt-2" : "workspace --auto-back-and-forth 2"
+        }
+        """)
+        let client = AeroSpaceClient(executablePath: "/usr/bin/true", runner: runner)
+
+        XCTAssertEqual(try client.workspaceKeyBindings(), ["2": "alt-2"])
+    }
+
+    func testWorkspaceKeyBindingsWithUnparseableOutput() throws {
+        let client = AeroSpaceClient(executablePath: "/usr/bin/true", runner: StubRunner(output: "not json"))
+
+        XCTAssertEqual(try client.workspaceKeyBindings(), [:])
+    }
+
     // MARK: - listWindows
 
     func testListWindowsParsesAllFields() throws {

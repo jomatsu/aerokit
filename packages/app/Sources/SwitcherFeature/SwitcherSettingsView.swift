@@ -24,6 +24,10 @@ struct SwitcherSettingsView: View {
                 gridColumnsRow
             }
 
+            SettingsSection("Workspace Order") {
+                workspaceOrderRow
+            }
+
             SettingsSection("Workspace Previews") {
                 autoRefreshRow
                 SettingsDivider()
@@ -93,6 +97,21 @@ struct SwitcherSettingsView: View {
         ) {
             SettingsToggle(isOn: $preferences.showOverlayHints)
         }
+    }
+
+    private var workspaceOrderRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Drag workspaces into the order they appear in the grid — swiping follows the same order")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            WorkspaceOrderEditor(
+                store: model.workspaceOrder,
+                loadWorkspaces: model.loadWorkspaces
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
     }
 
     private var gridColumnsRow: some View {
