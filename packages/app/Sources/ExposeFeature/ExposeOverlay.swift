@@ -162,6 +162,11 @@ final class ExposeOverlay {
         onHover?(index)
     }
 
+    // A flat key-dispatch switch: each branch is independent, so the
+    // complexity count reflects the number of bound keys, not tangled logic.
+    // A disable region rather than `:next` keeps the doc comment attached to
+    // the declaration.
+    // swiftlint:disable cyclomatic_complexity
     /// Swallows every key while the overview is up; unbound keys are
     /// ignored rather than passed to the window behind.
     private func handleKey(_ event: NSEvent) -> Bool {
@@ -209,6 +214,8 @@ final class ExposeOverlay {
         }
         return true
     }
+
+    // swiftlint:enable cyclomatic_complexity
 
     private func handleCharacterKey(_ event: NSEvent) {
         guard let character = event.charactersIgnoringModifiers?.first else {

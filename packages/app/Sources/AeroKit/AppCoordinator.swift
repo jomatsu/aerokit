@@ -118,26 +118,26 @@ final class AppCoordinator {
         guard settingsSummonTask == nil else { return }
         let client = client
         settingsSummonTask = Task { [weak self] in
-            let workspace = await Task.detached(priority: .userInitiated) { () -> String? in
+            let workspace = await BlockingWork.run { () -> String? in
                 do {
                     return try client.focusedWorkspaceName()
                 } catch {
                     log.error("reading focused workspace failed: \(error)")
                     return nil
                 }
-            }.value
+            }
 
             guard let self else { return }
             settingsWindow?.show()
 
             if let workspace, let windowID = settingsWindow?.windowID {
-                await Task.detached(priority: .userInitiated) {
+                await BlockingWork.run {
                     do {
                         try client.summonWindow(id: windowID, toWorkspace: workspace)
                     } catch {
                         log.error("summoning settings window failed: \(error)")
                     }
-                }.value
+                }
             }
             settingsSummonTask = nil
         }

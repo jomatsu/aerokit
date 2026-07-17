@@ -449,12 +449,8 @@ public final class SnapshotEngine: Sendable {
 
     /// One background hop for both blocking CLI round trips.
     private func listWorkspacesAndWindows() async throws -> (workspaces: [String], windows: [WorkspaceWindow]) {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async { [client] in
-                continuation.resume(with: Result {
-                    (try client.listWorkspaces().map(\.name), try client.listWindows())
-                })
-            }
+        try await BlockingWork.run { [client] in
+            try (client.listWorkspaces().map(\.name), client.listWindows())
         }
     }
 

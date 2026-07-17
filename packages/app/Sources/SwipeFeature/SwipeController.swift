@@ -137,9 +137,9 @@ public final class SwipeController {
             // The previous gesture's switch must land before this ring is
             // read, or AeroSpace still reports the old focused workspace.
             await previousCommit?.value
-            let ring = await Task.detached(priority: .userInitiated) { () -> Ring? in
+            let ring = await BlockingWork.run { () -> Ring? in
                 Self.loadRing(client: client, skipEmpty: skipEmpty)
-            }.value
+            }
             guard let ring, let self, preferences.showHUD else {
                 return ring
             }
@@ -171,9 +171,9 @@ public final class SwipeController {
         }
         let resolver = iconResolver
         iconTask = Task { [weak self] in
-            let icons = await Task.detached(priority: .userInitiated) { () -> [String: [NSImage]] in
+            let icons = await BlockingWork.run { () -> [String: [NSImage]] in
                 Self.loadIcons(client: client, resolver: resolver)
-            }.value
+            }
             guard let self, !Task.isCancelled else {
                 return
             }
@@ -215,7 +215,8 @@ public final class SwipeController {
                 workspaces: ring.workspaces,
                 offset: offset,
                 wrapAround: wrapAround
-            ).flatMap { $0.target != ring.current ? $0 : nil }
+            )
+            .flatMap { $0.target != ring.current ? $0 : nil }
 
             if showHUD, let self {
                 hud.settle(
@@ -228,18 +229,19 @@ public final class SwipeController {
             guard let plan else {
                 return
             }
-            await Task.detached(priority: .userInitiated) {
+            await BlockingWork.run {
                 do {
                     try client.switchToWorkspace(plan.target)
                 } catch {
                     log.error("swipe workspace switch failed: \(error)")
                 }
-            }.value
+            }
         }
     }
 
-    /// Blocking CLI round trips; runs detached. Returns nil (logged) when
-    /// AeroSpace is unreachable or reports no usable workspace.
+    /// Blocking CLI round trips; the caller runs it on BlockingWork. Returns
+    /// nil (logged) when AeroSpace is unreachable or reports no usable
+    /// workspace.
     private nonisolated static func loadRing(client: AeroSpaceClient, skipEmpty: Bool) -> Ring? {
         do {
             let workspaces = try client.workspacesOnFocusedMonitor(includeEmpty: !skipEmpty)
@@ -260,15 +262,15 @@ public final class SwipeController {
         }
     }
 
-    /// Blocking CLI round trip plus icon resolution; runs detached. One
-    /// `list-windows --all` covers every workspace — icon-less cards are
-    /// better than serializing a call per workspace.
+    /// Blocking CLI round trip plus icon resolution; the caller runs it on
+    /// BlockingWork. One `list-windows --all` covers every workspace —
+    /// icon-less cards are better than serializing a call per workspace.
     private nonisolated static func loadIcons(
         client: AeroSpaceClient,
         resolver: AppIconResolver
     ) -> [String: [NSImage]] {
         do {
-            return Dictionary(grouping: try client.listWindows(), by: \.workspace)
+            return try Dictionary(grouping: client.listWindows(), by: \.workspace)
                 .mapValues { windows in
                     WorkspaceApp.uniqueApps(from: windows).compactMap(resolver.icon(for:))
                 }

@@ -20,7 +20,7 @@ final class SwipeHUDRenderTests: XCTestCase {
                 "1": HUDRenderMocks.fakeScreenshot(hue: 0.58),
                 "2": HUDRenderMocks.fakeScreenshot(hue: 0.08),
                 "3": HUDRenderMocks.fakeScreenshot(hue: 0.33),
-                "browser": HUDRenderMocks.fakeScreenshot(hue: 0.75),
+                "browser": HUDRenderMocks.fakeScreenshot(hue: 0.75)
             ],
             wrapsAround: false,
             animated: false
@@ -32,10 +32,10 @@ final class SwipeHUDRenderTests: XCTestCase {
             "2": [
                 HUDRenderMocks.fakeIcon(hue: 0.1),
                 HUDRenderMocks.fakeIcon(hue: 0.5),
-                HUDRenderMocks.fakeIcon(hue: 0.8),
+                HUDRenderMocks.fakeIcon(hue: 0.8)
             ],
             "3": [HUDRenderMocks.fakeIcon(hue: 0.3)],
-            "code": [HUDRenderMocks.fakeIcon(hue: 0.55), HUDRenderMocks.fakeIcon(hue: 0.0)],
+            "code": [HUDRenderMocks.fakeIcon(hue: 0.55), HUDRenderMocks.fakeIcon(hue: 0.0)]
         ]
         model.isVisible = true
 

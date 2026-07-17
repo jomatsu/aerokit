@@ -190,15 +190,15 @@ public final class ExposeController {
         let client = client
         let capturer = capturer
         let preview = workspacePreview
-        // One background hop for the blocking CLI and WindowServer queries.
-        let context = await Task.detached(priority: .userInitiated) { () -> PresentationContext? in
-            switch scope {
-            case .workspace:
-                await Self.workspaceContext(client: client, capturer: capturer, preview: preview)
-            case .app:
-                await Self.appContext(client: client, capturer: capturer, preview: preview)
-            }
-        }.value
+        // The context helpers run off the main actor and route each blocking
+        // CLI round trip through BlockingWork; the WindowServer queries stay
+        // inline. A wedged server can't pin a cooperative-pool thread.
+        let context: PresentationContext? = switch scope {
+        case .workspace:
+            await Self.workspaceContext(client: client, capturer: capturer, preview: preview)
+        case .app:
+            await Self.appContext(client: client, capturer: capturer, preview: preview)
+        }
 
         guard epoch == presentEpoch else {
             return
@@ -256,12 +256,17 @@ public final class ExposeController {
         // The focused-window query only seeds the initial selection, and
         // the drop-bar content is invisible until a drag starts, so both
         // run concurrently instead of paying extra CLI round trips before
-        // the overlay can show.
-        async let focused = client.focusedWindow()
-        async let dropBar = loadDropBarContent(preview: preview) {
-            try client.workspacesOnFocusedMonitor(includeEmpty: true)
+        // the overlay can show. Each blocking round trip hops to BlockingWork
+        // so the overlap happens on the GCD pool, not the cooperative one.
+        async let focused = BlockingWork.run { client.focusedWindow() }
+        async let dropBar = BlockingWork.run {
+            Self.loadDropBarContent(preview: preview) {
+                try client.workspacesOnFocusedMonitor(includeEmpty: true)
+            }
         }
-        guard let snapshot = loadSnapshot("workspace", { try client.focusedWorkspaceWindows() }) else {
+        guard let snapshot = await BlockingWork.run({
+            Self.loadSnapshot("workspace") { try client.focusedWorkspaceWindows() }
+        }) else {
             return nil
         }
         return await PresentationContext(
@@ -282,17 +287,23 @@ public final class ExposeController {
     ) async -> PresentationContext? {
         // The bounds query talks to the WindowServer, not the CLI, so it can
         // overlap the dependent CLI round trips; the drop-bar content is
-        // invisible until a drag starts, so it loads concurrently too.
+        // invisible until a drag starts, so it loads concurrently too. The
+        // CLI round trips hop to BlockingWork; the WindowServer query stays
+        // on the cooperative pool because it can't wedge the way the CLI can.
         async let bounds = capturer.windowBoundsByID()
         // The app's windows span monitors, so every workspace is a valid
         // drop target.
-        async let dropBar = loadDropBarContent(preview: preview) { try client.listWorkspaces() }
-        guard let focused = client.focusedWindow() else {
+        async let dropBar = BlockingWork.run {
+            Self.loadDropBarContent(preview: preview) { try client.listWorkspaces() }
+        }
+        guard let focused = await BlockingWork.run({ client.focusedWindow() }) else {
             log.error("app exposé: no focused window")
             return nil
         }
-        guard var snapshot = loadSnapshot("app", {
-            try client.appWindows(bundleIdentifier: focused.bundleIdentifier, pid: focused.pid)
+        guard var snapshot = await BlockingWork.run({
+            Self.loadSnapshot("app") {
+                try client.appWindows(bundleIdentifier: focused.bundleIdentifier, pid: focused.pid)
+            }
         }) else {
             return nil
         }
@@ -510,7 +521,7 @@ public final class ExposeController {
         }
         let id = session.tiles[index].window.id
         dismiss()
-        runDetached(failureLabel: "focusing window \(id)") {
+        runInBackground(failureLabel: "focusing window \(id)") {
             try $0.focusWindow(id: id)
         }
     }
@@ -558,7 +569,7 @@ public final class ExposeController {
         }
         if preferences.followMovedWindow {
             dismiss()
-            runDetached(failureLabel: "moving window \(id) to \(workspace)") {
+            runInBackground(failureLabel: "moving window \(id) to \(workspace)") {
                 try $0.summonWindow(id: id, toWorkspace: workspace)
             }
         } else {
@@ -585,21 +596,25 @@ public final class ExposeController {
         if session.tiles.isEmpty {
             dismiss()
         }
-        runDetached(failureLabel: failureLabel, command)
+        runInBackground(failureLabel: failureLabel, command)
     }
 
     /// Fire-and-forget AeroSpace command off the main actor, stderr-logged
-    /// on failure — the mold every overlay-triggered command shares.
-    private func runDetached(
+    /// on failure — the mold every overlay-triggered command shares. The
+    /// blocking round trip runs on BlockingWork so a wedged server can't
+    /// starve the cooperative pool.
+    private func runInBackground(
         failureLabel: String,
         _ command: @escaping @Sendable (AeroSpaceClient) throws -> Void
     ) {
         let client = client
-        Task.detached(priority: .userInitiated) {
-            do {
-                try command(client)
-            } catch {
-                log.error("\(failureLabel) failed: \(error)")
+        Task {
+            await BlockingWork.run {
+                do {
+                    try command(client)
+                } catch {
+                    log.error("\(failureLabel) failed: \(error)")
+                }
             }
         }
     }

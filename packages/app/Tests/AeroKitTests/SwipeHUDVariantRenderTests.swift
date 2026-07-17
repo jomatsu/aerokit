@@ -16,18 +16,21 @@ final class SwipeHUDVariantRenderTests: XCTestCase {
 
     static let workspaces: [Workspace] = [
         Workspace(name: "1", preview: HUDRenderMocks.fakeScreenshot(hue: 0.58), apps: [
-            ("Safari", HUDRenderMocks.fakeIcon(hue: 0.6)), ("Mail", HUDRenderMocks.fakeIcon(hue: 0.95)),
+            ("Safari", HUDRenderMocks.fakeIcon(hue: 0.6)), ("Mail", HUDRenderMocks.fakeIcon(hue: 0.95))
         ]),
         Workspace(name: "2", preview: HUDRenderMocks.fakeScreenshot(hue: 0.08), apps: [
-            ("Code", HUDRenderMocks.fakeIcon(hue: 0.1)), ("Terminal", HUDRenderMocks.fakeIcon(hue: 0.5)), ("Slack", HUDRenderMocks.fakeIcon(hue: 0.8)),
+            ("Code", HUDRenderMocks.fakeIcon(hue: 0.1)), ("Terminal", HUDRenderMocks.fakeIcon(hue: 0.5)), (
+                "Slack",
+                HUDRenderMocks.fakeIcon(hue: 0.8)
+            )
         ]),
         Workspace(name: "3", preview: HUDRenderMocks.fakeScreenshot(hue: 0.33), apps: [
-            ("Figma", HUDRenderMocks.fakeIcon(hue: 0.3)),
+            ("Figma", HUDRenderMocks.fakeIcon(hue: 0.3))
         ]),
         Workspace(name: "browser", preview: HUDRenderMocks.fakeScreenshot(hue: 0.75), apps: []),
         Workspace(name: "code", preview: nil, apps: [
-            ("Xcode", HUDRenderMocks.fakeIcon(hue: 0.55)), ("Music", HUDRenderMocks.fakeIcon(hue: 0.0)),
-        ]),
+            ("Xcode", HUDRenderMocks.fakeIcon(hue: 0.55)), ("Music", HUDRenderMocks.fakeIcon(hue: 0.0))
+        ])
     ]
     static let selectedIndex = 1
 
@@ -90,7 +93,11 @@ final class SwipeHUDVariantRenderTests: XCTestCase {
         }
     }
 
-    static func thumb(_ workspace: Workspace, selected: Bool, size: CGSize = CGSize(width: 100, height: 62.5)) -> some View {
+    static func thumb(
+        _ workspace: Workspace,
+        selected: Bool,
+        size: CGSize = CGSize(width: 100, height: 62.5)
+    ) -> some View {
         ZStack {
             if let preview = workspace.preview {
                 Image(nsImage: preview).resizable().aspectRatio(contentMode: .fill)
@@ -310,5 +317,4 @@ final class SwipeHUDVariantRenderTests: XCTestCase {
             }
         }
     }
-
 }

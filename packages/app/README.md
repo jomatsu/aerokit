@@ -14,18 +14,17 @@ Recording grant covers every feature.
 
 ## Features
 
-<!-- TODO: add screenshots/GIFs per feature, e.g.
-![Switcher](../../docs/images/switcher.png)
--->
-
-
 ### Switcher (default <kbd>⌥`</kbd>)
+
+![Workspace Switcher](../../docs/images/aerokit-switcher.gif)
 
 Cmd-Tab-style workspace switcher with snapshot previews. Hold the modifier
 and tap the key to cycle; release to switch. Snapshots refresh in the
 background and on demand.
 
 ### Exposé (default <kbd>⌥M</kbd>)
+
+![Exposé](../../docs/images/aerokit-expose.gif)
 
 Mission-Control-style overview of the focused workspace: live window
 previews in a grid, laid out the way the windows sit on screen.
@@ -49,6 +48,8 @@ scopes, like Mission Control vs App Exposé.
 
 ### Swipe (three-finger trackpad swipe)
 
+![Trackpad Swipe](../../docs/images/aerokit-swipe.gif)
+
 Swipe left or right with three fingers to switch between the focused
 monitor's AeroSpace workspaces. A Raycast-style workspace strip briefly
 appears at the bottom of the screen with the focused workspace
@@ -60,16 +61,33 @@ swipes up/down still belong to Exposé.
 All hotkeys are configurable from the settings window (menu bar icon →
 Settings).
 
+## Privacy
+
+Snapshots are screenshots of your windows plus a manifest listing their
+titles. They stay on your machine, unencrypted, under
+`~/Library/Application Support/AeroKit/Workspace Snapshots` (older installs
+are moved there automatically from `~/Pictures/AeroSpace Workspaces`).
+Nothing ever leaves the machine.
+
+To keep sensitive apps out of snapshots — password managers, banking — list
+them under Settings → Switcher → Exclude Apps (app names or bundle IDs,
+comma-separated). Excluded windows are never captured or listed in the
+manifest.
+
+Turning off automatic refresh in Settings stops all captures; deleting the
+folder above removes every stored image.
+
 ## Install
 
 ```sh
 scripts/install-app.sh
 ```
 
-Builds a release binary, wraps it into `~/Applications/AeroKit.app`, and
-registers a LaunchAgent. The installer also retires the pre-unification
-`AeroSwitcher.app` / `AeroExpose.app` and their LaunchAgents; preferences
-carry over automatically.
+Builds a release binary and wraps it into `~/Applications/AeroKit.app`. On
+first launch AeroKit registers itself as a login item (System Settings ›
+General › Login Items), which you can toggle from the settings window. The
+installer also retires the pre-unification `AeroSwitcher.app` /
+`AeroExpose.app` and their LaunchAgents; preferences carry over automatically.
 
 Grant **Screen Recording** in the settings window when prompted — previews
 need it (the apps still work without it, minus previews).
@@ -81,6 +99,16 @@ AeroKit --open-settings
 AeroKit --toggle-expose
 AeroKit --toggle-app-expose
 ```
+
+## Uninstall
+
+```sh
+scripts/uninstall-app.sh          # keeps snapshots & preferences
+scripts/uninstall-app.sh --purge  # removes them too
+```
+
+Removes the app bundle and its login item; `--purge` also deletes stored
+snapshots and AeroKit's preferences.
 
 ## Architecture
 

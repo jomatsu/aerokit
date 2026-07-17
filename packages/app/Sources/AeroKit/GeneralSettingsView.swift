@@ -53,7 +53,7 @@ final class GeneralSettingsModel: ObservableObject {
         guard healthTask == nil else { return }
         let client = client
         healthTask = Task { [weak self] in
-            let health = await Task.detached(priority: .userInitiated) { client.checkHealth() }.value
+            let health = await BlockingWork.run { client.checkHealth() }
             self?.aeroSpaceHealth = health
             self?.healthTask = nil
         }

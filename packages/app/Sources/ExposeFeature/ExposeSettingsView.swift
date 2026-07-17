@@ -93,6 +93,9 @@ struct ExposeSettingsView: View {
     }
 
     private var shortcutsSection: some View {
+        // A flat SwiftUI builder: its length tracks the number of settings
+        // rows, not real nesting or branching.
+        // swiftlint:disable:next closure_body_length
         SettingsSection("Shortcuts") {
             SettingsRow(
                 title: "Show window overview",
@@ -144,7 +147,10 @@ struct ExposeSettingsView: View {
             SettingsDivider()
             SettingsRow(
                 title: "Follow moved window",
-                subtitle: "After \u{21E7}1\u{2013}9 or a drag moves a window, switch to its workspace instead of staying in the overview"
+                subtitle: """
+                After \u{21E7}1\u{2013}9 or a drag moves a window, switch to its \
+                workspace instead of staying in the overview
+                """
             ) {
                 SettingsToggle(isOn: $preferences.followMovedWindow)
             }

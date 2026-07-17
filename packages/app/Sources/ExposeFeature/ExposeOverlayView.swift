@@ -358,7 +358,8 @@ struct ExposeOverlayView: View {
             }
     }
 
-    @ViewBuilder private func grid(in size: CGSize) -> some View {
+    @ViewBuilder
+    private func grid(in size: CGSize) -> some View {
         if let sections = session.sections, let sectionRows = session.sectionRows {
             groupedGrid(sections: sections, sectionRows: sectionRows, in: size)
         } else {

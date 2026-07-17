@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Makefile's lint target needs both tools; the runner image ships
+      # neither. Installing the latest keeps CI aligned with `make bootstrap`,
+      # so formatter-rule drift surfaces here instead of on contributors'
+      # machines.
+      - name: Install SwiftFormat & SwiftLint
+        run: brew install swiftformat swiftlint
+
+      - name: Lint
+        run: make lint
+
+      - name: Build
+        run: make build
+
+      - name: Test
+        run: make test

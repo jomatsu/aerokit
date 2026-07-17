@@ -2,6 +2,8 @@ import AppKit
 import Darwin
 import Foundation
 
+private let log = AppLog(category: "core")
+
 /// Detects three-finger swipes on Apple trackpads through the private
 /// MultitouchSupport framework — the only way to observe trackpad touches
 /// globally, since NSEvent gesture events only reach the app's own windows.
@@ -85,6 +87,16 @@ public final class TrackpadSwipeMonitor {
 
     private var devices: CFArray?
     private var framework: Framework?
+    /// Sleep/wake commonly leaves the MultitouchSupport contact callbacks
+    /// silently detached — the devices still enumerate but never fire again —
+    /// so the monitor re-registers them on `NSWorkspace.didWakeNotification`.
+    /// Held here as the balancing counterpart to `stop()`, since the same
+    /// instance is started and stopped repeatedly (see `stepDistanceMM`).
+    private var wakeObserver: (any NSObjectProtocol)?
+    /// The post-wake re-registration is staggered because the trackpad is
+    /// often not yet enumerable in the first moments after wake; retained so
+    /// an external `stop()` can cancel a retry nobody wants anymore.
+    private var restartTask: Task<Void, Never>?
 
     public init() {}
 
@@ -125,10 +137,18 @@ public final class TrackpadSwipeMonitor {
         }
         Self.active.activate(self, detectors: detectors)
         isRunning = true
+        addWakeObserver()
         return true
     }
 
     public func stop() {
+        // Tear down the wake machinery ahead of the running-state guard: an
+        // external stop() (the user disabling the feature) arriving while a
+        // post-wake retry is mid-flight must win, or the retry loop would go
+        // on to restart a monitor nobody wants running.
+        restartTask?.cancel()
+        restartTask = nil
+        removeWakeObserver()
         guard isRunning, let framework, let devices else {
             return
         }
@@ -145,6 +165,62 @@ public final class TrackpadSwipeMonitor {
         // the next start() always measures from a fresh baseline.
         Self.active.deactivate()
         isRunning = false
+    }
+
+    // MARK: - Sleep/wake recovery
+
+    /// Idempotent so the repeated stop()/start() cycles (e.g. a
+    /// `stepDistanceMM` change) never stack duplicate observers.
+    private func addWakeObserver() {
+        guard wakeObserver == nil else {
+            return
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleWake()
+            }
+        }
+    }
+
+    private func removeWakeObserver() {
+        guard let wakeObserver else {
+            return
+        }
+        NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        self.wakeObserver = nil
+    }
+
+    /// stop() drops the stale device registrations and gesture state; the
+    /// observer is re-armed at once so a wake whose retries all fail can still
+    /// recover on a later wake, and the staggered start() attempts span the
+    /// window where the trackpad is not yet enumerable right after wake.
+    private func handleWake() {
+        guard isRunning else {
+            return
+        }
+        stop()
+        addWakeObserver()
+        restartTask = Task { @MainActor [weak self] in
+            for delay in [Duration.zero, .seconds(1), .seconds(3)] {
+                if delay > .zero {
+                    try? await Task.sleep(for: delay)
+                }
+                if Task.isCancelled {
+                    return
+                }
+                guard let self else {
+                    return
+                }
+                if start() {
+                    return
+                }
+            }
+            log.error("trackpad swipe monitor did not recover after wake")
+        }
     }
 
     // MARK: - MultitouchSupport bridging
@@ -389,6 +465,11 @@ final class SwipeDetector: @unchecked Sendable {
         self.stepDistanceMM = stepDistanceMM
     }
 
+    // A single-pass gesture state machine: the phase, per-finger baselines,
+    // and dropout grace are threaded through one traversal of the frame, so
+    // splitting it would scatter that shared state across helpers for no real
+    // clarity gain.
+    // swiftlint:disable:next cyclomatic_complexity function_body_length
     func process(touches: UnsafePointer<MTTouch>?, count: Int) -> [SwipeEvent] {
         lock.lock()
         defer { lock.unlock() }
@@ -434,6 +515,9 @@ final class SwipeDetector: @unchecked Sendable {
         }
 
         // Exactly three fingers from here on.
+        // A positional record that lives only within this pass and never
+        // escapes, so a tuple stays clearer here than a named struct.
+        // swiftlint:disable:next large_tuple
         var fingers: [(id: Int32, x: Float, y: Float, vx: Float, vy: Float)] = []
         fingers.reserveCapacity(3)
         if let touches {

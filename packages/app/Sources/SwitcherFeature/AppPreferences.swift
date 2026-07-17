@@ -149,7 +149,7 @@ public final class AppPreferences: ObservableObject {
     public var snapshotExclusions: Set<String> {
         Set(
             snapshotExcludedApps
-                .split(whereSeparator: { $0 == "," || $0.isNewline })
+                .split { $0 == "," || $0.isNewline }
                 .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
                 .filter { !$0.isEmpty }
         )

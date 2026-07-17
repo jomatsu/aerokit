@@ -53,7 +53,8 @@ struct SwitcherSelection {
         if !overlayVisible || !hasUserNavigated {
             index = Self.focusedIndex(in: workspaces)
         } else if let previousName,
-                  let found = workspaces.firstIndex(where: { $0.name == previousName }) {
+                  let found = workspaces.firstIndex(where: { $0.name == previousName })
+        {
             index = found
         } else if index >= workspaces.count {
             index = max(0, workspaces.count - 1)

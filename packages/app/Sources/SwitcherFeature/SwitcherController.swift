@@ -381,10 +381,11 @@ extension SwitcherController {
         _ work: @escaping @Sendable () throws -> T,
         then handle: @escaping @MainActor (Result<T, any Error>) -> Void
     ) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result(catching: work)
-            DispatchQueue.main.async {
-                handle(result)
+        Task {
+            do {
+                try await handle(.success(BlockingWork.run(work)))
+            } catch {
+                handle(.failure(error))
             }
         }
     }
