@@ -405,14 +405,12 @@ final class SwipeDetector: @unchecked Sendable {
     /// How decisively one axis must beat the other to lock; until then a
     /// diagonal wobble keeps the gesture undecided rather than guessing.
     private static let axisDominanceRatio: Float = 1.2
-    /// Seconds of post-release coasting credited to the commit: the
-    /// fingers' release velocity projects this far ahead, so a flick
-    /// commits the step it was clearly headed for while the residual drift
-    /// of a careful drag barely moves the projection.
-    private static let momentumProjectionSeconds: Float = 0.15
-    /// Momentum may add at most one step beyond the travelled distance, so
-    /// a violent flick cannot fly past what the fingers actually did.
-    private static let momentumStepCap: Float = 1.0
+    /// Release speed (mm/s along the locked axis) that reads as a
+    /// deliberate flick. Below it the lift-off velocity is ignored —
+    /// MultitouchSupport's final contact frames commonly report small
+    /// spurious velocities as the fingers peel off the pad — and the
+    /// outcome comes from position alone.
+    private static let flickSpeedMM: Float = 120
     /// Every finger must itself travel this far in the swipe direction
     /// before the axis can lock; splaying or pinching fingers can move the
     /// centroid without anyone having swiped.
@@ -626,17 +624,26 @@ final class SwipeDetector: @unchecked Sendable {
         return [.ended(axis, steps: 0)]
     }
 
+    /// Decides the commit like a native page swipe. A sub-threshold release
+    /// commits the step nearest the fingers — exactly the card a progress
+    /// UI highlights at that moment, so display and outcome cannot
+    /// diverge. A deliberate flick completes the step the fingers were
+    /// headed for in the flick's direction, from however short a distance —
+    /// but never more: no release velocity carries the commit past the
+    /// next step boundary, and none cancels a boundary already reached.
+    /// The epsilon keeps float noise at an exact boundary from leaking or
+    /// dropping a step there.
     private func steps(progress: Float, speed: Float) -> Int {
-        // Project the release velocity ahead like scroll-view deceleration:
-        // momentum carries a flick into the step it was headed for, and an
-        // opposing throw-back naturally subtracts toward a cancel.
-        let momentum = speed * Self.momentumProjectionSeconds / stepDistanceMM
-        let projected = progress + max(-Self.momentumStepCap, min(Self.momentumStepCap, momentum))
-        // Round to nearest so the gesture commits whatever step its
-        // projection is closest to — what a progress UI shows under the
-        // fingers at release. The epsilon keeps float noise from flipping
-        // exact-half-way releases toward zero.
-        let epsilon: Float = projected >= 0 ? 0.0001 : -0.0001
-        return Int((projected + epsilon).rounded())
+        let epsilon: Float = 0.0001
+        if speed >= Self.flickSpeedMM {
+            return Int((progress - epsilon).rounded(.up))
+        }
+        if speed <= -Self.flickSpeedMM {
+            return Int((progress + epsilon).rounded(.down))
+        }
+        // Half-way releases round away from zero, so the bias follows the
+        // travel's sign.
+        let bias: Float = progress >= 0 ? epsilon : -epsilon
+        return Int((progress + bias).rounded())
     }
 }

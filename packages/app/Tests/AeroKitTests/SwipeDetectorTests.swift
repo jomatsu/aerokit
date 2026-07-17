@@ -159,7 +159,7 @@ final class SwipeDetectorTests: XCTestCase {
     func testFastFlickCommitsFromAShortDistance() {
         XCTAssertEqual(frame(fingers: threeFingers(atY: 0.3)), [])
         // Only 8 mm of travel, but still moving upward at 250 mm/s at
-        // release: momentum projects the commit into the next step.
+        // release: the flick completes the step it was headed for.
         assertEvents(
             frame(fingers: threeFingers(atY: 0.38), velocity: (0, 2.5)),
             [.began(.vertical), .moved(.vertical, progress: 0.2286)]
@@ -173,6 +173,61 @@ final class SwipeDetectorTests: XCTestCase {
         // 60 mm/s must stay one step.
         assertEvents(
             frame(fingers: threeFingers(atY: 0.65), velocity: (0, 0.6)),
+            [.began(.vertical), .moved(.vertical, progress: 1.0)]
+        )
+        assertEvents(frame(fingers: []), [.ended(.vertical, steps: 1)])
+    }
+
+    func testFlickNeverCommitsPastTheNextStep() {
+        XCTAssertEqual(frame(fingers: threeFingers(atY: 0.3)), [])
+        // 21 mm of travel — past half a step — released still moving fast:
+        // the flick completes the step in progress, never the one beyond.
+        assertEvents(
+            frame(fingers: threeFingers(atY: 0.51), velocity: (0, 4.0)),
+            [.began(.vertical), .moved(.vertical, progress: 0.6)]
+        )
+        assertEvents(frame(fingers: []), [.ended(.vertical, steps: 1)])
+    }
+
+    func testFlickAtAStepBoundaryDoesNotLeakAnExtraStep() {
+        XCTAssertEqual(frame(fingers: threeFingers(atY: 0.3)), [])
+        // Exactly one step of travel, still moving fast at release.
+        assertEvents(
+            frame(fingers: threeFingers(atY: 0.65), velocity: (0, 4.0)),
+            [.began(.vertical), .moved(.vertical, progress: 1.0)]
+        )
+        assertEvents(frame(fingers: []), [.ended(.vertical, steps: 1)])
+    }
+
+    func testFlickOnALongSwipeCompletesTheStepInProgress() {
+        XCTAssertEqual(frame(fingers: threeFingers(atY: 0.15)), [])
+        // 1.4 steps of travel released as a flick: the commit finishes the
+        // second step, not a third.
+        assertEvents(
+            frame(fingers: threeFingers(atY: 0.64), velocity: (0, 4.0)),
+            [.began(.vertical), .moved(.vertical, progress: 1.4)]
+        )
+        assertEvents(frame(fingers: []), [.ended(.vertical, steps: 2)])
+    }
+
+    func testSmallBackwardDriftDoesNotCancelAPastHalfwayRelease() {
+        XCTAssertEqual(frame(fingers: threeFingers(atY: 0.3)), [])
+        // Past half a step with a light backward creep on the final frame —
+        // lift-off noise, not a throw-back — the nearest step commits, as
+        // the highlight under the fingers shows.
+        assertEvents(
+            frame(fingers: threeFingers(atY: 0.51), velocity: (0, -0.6)),
+            [.began(.vertical), .moved(.vertical, progress: 0.6)]
+        )
+        assertEvents(frame(fingers: []), [.ended(.vertical, steps: 1)])
+    }
+
+    func testBackwardVelocityCannotCancelACompletedStep() {
+        XCTAssertEqual(frame(fingers: threeFingers(atY: 0.3)), [])
+        // A full step of travel with backward velocity at release: the
+        // boundary was reached, so the step stays committed.
+        assertEvents(
+            frame(fingers: threeFingers(atY: 0.65), velocity: (0, -2.5)),
             [.began(.vertical), .moved(.vertical, progress: 1.0)]
         )
         assertEvents(frame(fingers: []), [.ended(.vertical, steps: 1)])
