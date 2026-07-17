@@ -45,6 +45,10 @@ public final class SwipeController {
     /// previous switch, or a quick second swipe would move from a stale
     /// workspace.
     private var commitTask: Task<Void, Never>?
+    /// Identifies the newest commit so the post-commit focus check can
+    /// tell "focus moved because something external switched" from "focus
+    /// moved because the user swiped again".
+    private var commitEpoch = 0
     private var gestureActive = false
     private var latestOffset: CGFloat = 0
 
@@ -74,6 +78,11 @@ public final class SwipeController {
     }
 
     public func start() {
+        settingsModel.refreshSystemGestureConflict(gestureEnabled: preferences.isEnabled)
+        if settingsModel.systemGestureConflictMessage != nil {
+            log.error("system three-finger Space swipe is enabled; workspace swipes will also slide macOS Spaces")
+        }
+
         preferences.$isEnabled.dropFirst()
             .sink { [weak self] enabled in
                 guard let self else { return }
@@ -81,6 +90,7 @@ public final class SwipeController {
                     gestureActive = false
                     hud.hide()
                 }
+                settingsModel.refreshSystemGestureConflict(gestureEnabled: enabled)
                 onSwipePreferenceChanged?()
             }
             .store(in: &cancellables)
@@ -235,6 +245,8 @@ public final class SwipeController {
         let wrapAround = preferences.wrapAround
         let showHUD = preferences.showHUD
         let client = client
+        commitEpoch += 1
+        let epoch = commitEpoch
         commitTask = Task { [weak self] in
             guard let ring = await ringTask?.value else {
                 return
@@ -272,10 +284,46 @@ public final class SwipeController {
             await BlockingWork.run {
                 do {
                     try client.switchToWorkspace(plan.target)
+                    // What AeroSpace reports right after the switch: a
+                    // mismatch already here would be the switch itself
+                    // going wrong, not a later external actor.
+                    let landed = (try? client.focusedWorkspaceName()).flatMap(\.self)
+                    log.notice("swipe landed: \(landed ?? "unknown") (committed: \(plan.target))")
                 } catch {
                     log.error("swipe workspace switch failed: \(error)")
                 }
             }
+            self?.verifyFocus(after: plan.target, epoch: epoch)
+        }
+    }
+
+    /// Reads focus back one second after a commit landed. If it moved off
+    /// the committed workspace and no newer gesture took over, something
+    /// outside AeroKit switched — most likely the system's own
+    /// three-finger Space swipe, which reacts to the same physical
+    /// gesture and slides the screen to another macOS Space on top of our
+    /// (correct) workspace switch. The frontmost app names the Space the
+    /// screen actually ended on.
+    private func verifyFocus(after target: String, epoch: Int) {
+        let client = client
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, epoch == commitEpoch else {
+                return
+            }
+            let focused = await BlockingWork.run { (try? client.focusedWorkspaceName()).flatMap(\.self) }
+            guard let focused, focused != target else {
+                return
+            }
+            let frontmost = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
+            log.error(
+                """
+                post-swipe drift: \(target) → \(focused) within 1s \
+                (frontmost: \(frontmost)) — an external gesture handler \
+                (e.g. the macOS three-finger Space swipe) moved the screen \
+                after the commit
+                """
+            )
         }
     }
 

@@ -21,6 +21,29 @@ public enum SystemSwipeGestures {
         }
     }
 
+    /// The system's own three-finger horizontal swipe ("Swipe between
+    /// full-screen applications", System Settings → Trackpad → More
+    /// Gestures). It is recognized from the same raw touches AeroKit
+    /// observes and cannot be consumed, so while it is set to three
+    /// fingers every workspace swipe also slides the whole screen to a
+    /// neighbouring macOS Space — the workspace switch lands correctly
+    /// and a different Space then covers it. 2 is the three-finger
+    /// setting; off (0) or four fingers leaves three-finger swipes to
+    /// AeroKit. An absent key means the macOS default, which is on.
+    public static var horizontalThreeFingerSpaceSwipeEnabled: Bool {
+        let domains = [
+            "com.apple.AppleMultitouchTrackpad",
+            "com.apple.driver.AppleBluetoothMultitouch.trackpad"
+        ]
+        return domains.contains { domain in
+            let value = CFPreferencesCopyAppValue(
+                "TrackpadThreeFingerHorizSwipeGesture" as CFString,
+                domain as CFString
+            ) as? Int
+            return (value ?? 2) == 2
+        }
+    }
+
     /// Flips both checkboxes and restarts the Dock so the change applies
     /// immediately. Blocks on the Dock kill — call off the main thread.
     public static func setEnabled(_ enabled: Bool) throws {

@@ -10,12 +10,20 @@ struct SwipeSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             trackpadSection
+
+            if let message = model.systemGestureConflictMessage {
+                SettingsErrorBanner(message)
+            }
+
             behaviorSection
             workspaceOrderSection
 
             if let message = model.swipeErrorMessage {
                 SettingsErrorBanner(message)
             }
+        }
+        .onAppear {
+            model.refreshSystemGestureConflict(gestureEnabled: preferences.isEnabled)
         }
     }
 
@@ -118,4 +126,22 @@ struct SwipeSettingsView: View {
 @MainActor
 final class SwipeSettingsModel: ObservableObject {
     @Published var swipeErrorMessage: String?
+    @Published var systemGestureConflictMessage: String?
+
+    /// The system's three-finger Space swipe cannot be consumed, so while
+    /// it is on, every workspace swipe also slides the screen to another
+    /// macOS Space. There is no reliable programmatic fix (the trackpad
+    /// preference only applies on re-login), so surface the exact setting
+    /// to change instead of a button.
+    func refreshSystemGestureConflict(gestureEnabled: Bool) {
+        systemGestureConflictMessage = gestureEnabled
+            && SystemSwipeGestures.horizontalThreeFingerSpaceSwipeEnabled
+            ? """
+            macOS also reacts to three-finger horizontal swipes and slides \
+            to another Space over the switched workspace. Set System \
+            Settings → Trackpad → More Gestures → “Swipe between \
+            full-screen applications” to Off or four fingers.
+            """
+            : nil
+    }
 }
