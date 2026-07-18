@@ -1,4 +1,4 @@
-# aerokit
+# AeroKit
 
 [![CI](https://github.com/jomatsu/aerokit/actions/workflows/ci.yml/badge.svg)](https://github.com/jomatsu/aerokit/actions/workflows/ci.yml)
 
