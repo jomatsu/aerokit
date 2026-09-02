@@ -419,84 +419,27 @@ public final class ExposeController {
             gap: TileMetrics.gap,
             margin: TileMetrics.margin
         )
-        let maxDimension = max(cell.width, cell.height) * screen.backingScaleFactor
-        let displayScale = screen.backingScaleFactor
         let ids = session.tiles.map(\.window.id)
         let capturer = capturer
+        let request = WindowPreviewCapture.Request(
+            capturer: capturer,
+            ids: ids,
+            bounds: bounds,
+            displayScale: screen.backingScaleFactor,
+            maxDimension: max(cell.width, cell.height) * screen.backingScaleFactor
+        )
 
         captureTask = Task { [weak session] in
-            var missed: [CGWindowID] = []
-            await withTaskGroup(of: (CGWindowID, CGImage?).self) { group in
-                for id in ids {
-                    let pointSize = bounds[id]?.size
-                    group.addTask {
-                        let image = await CaptureLimiter.shared.withSlot { () -> CGImage? in
-                            // A dismissed overview cancels its captures; once
-                            // the slot frees up, skip the stale work instead
-                            // of capturing for a session that is gone.
-                            guard !Task.isCancelled else {
-                                return nil
-                            }
-                            return capturer.captureImageFast(
-                                windowID: id,
-                                maxDimension: maxDimension,
-                                pointSize: pointSize
-                            )
-                        }
-                        return (id, image)
+            await WindowPreviewCapture.run(
+                request,
+                deliver: { id, image in
+                    guard let image else {
+                        return
                     }
-                }
-                for await (id, image) in group {
-                    if let image {
-                        session?.setImage(image, forWindow: id)
-                    } else {
-                        missed.append(id)
-                    }
-                }
-            }
-
-            guard !Task.isCancelled else {
-                return
-            }
-            onInitialCaptures()
-
-            guard !missed.isEmpty else {
-                return
-            }
-            await Self.captureFallback(
-                capturer: capturer,
-                ids: missed,
-                displayScale: displayScale,
-                maxDimension: maxDimension,
-                session: session
+                    session?.setImage(image, forWindow: id)
+                },
+                onInitialPass: onInitialCaptures
             )
-        }
-    }
-
-    /// ScreenCaptureKit pass for windows the fast path could not read.
-    /// Sequential on purpose: the fallback is rare and SCScreenshotManager
-    /// captures serialize in replayd anyway.
-    private static func captureFallback(
-        capturer: WindowImageCapturer,
-        ids: [CGWindowID],
-        displayScale: CGFloat,
-        maxDimension: CGFloat,
-        session: ExposeSession?
-    ) async {
-        guard let shareable = try? await capturer.shareableWindows() else {
-            return
-        }
-        for id in ids {
-            guard !Task.isCancelled, let window = shareable[id] else {
-                continue
-            }
-            if let image = try? await capturer.captureImage(
-                of: window,
-                displayScale: displayScale,
-                maxDimension: maxDimension
-            ) {
-                session?.setImage(image, forWindow: id)
-            }
         }
     }
 

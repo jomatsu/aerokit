@@ -48,6 +48,21 @@ public final class WindowImageCapturer: Sendable {
         return result
     }
 
+    /// All on-screen window ids, front to back — the system's stacking
+    /// order, the recency proxy a hold-to-cycle switcher cycles through.
+    /// Desktop elements are excluded; AeroSpace's parked windows are still
+    /// on screen (just moved offscreen), so callers filter by their own
+    /// window set.
+    public func onScreenWindowIDsFrontToBack() -> [CGWindowID] {
+        guard let info = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return []
+        }
+        return info.compactMap { $0[kCGWindowNumber as String] as? CGWindowID }
+    }
+
     // MARK: - Fast path: CGWindowListCreateImage
 
     /// CGWindowListCreateImage reads the window backing store directly

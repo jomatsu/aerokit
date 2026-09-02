@@ -24,9 +24,9 @@ public final class SwiftUIOverlay: ObservableObject {
     private let panel: OverlayPanel
     private var hostingView: NSHostingView<SwitcherOverlayView>?
     private var keyMonitor: Any?
-    private var flagsMonitor: Any?
-    private var modifierWatchdog: Timer?
-    private var triggerModifiersHeldSinceShow = false
+    /// Release-to-commit detection shared with the window switcher; per
+    /// show, since the trigger flags follow the current hotkey preference.
+    private var dismissor: HoldToCommitDismiss?
     private var mouseLocationAtShow = NSPoint.zero
 
     public var isVisible: Bool {
@@ -57,19 +57,26 @@ public final class SwiftUIOverlay: ObservableObject {
         // NSEvent.modifierFlags can report empty before this process has
         // received its first NSEvent (e.g. the very first show after launch,
         // triggered via a Carbon hotkey), so read the session state directly.
-        triggerModifiersHeldSinceShow = Self.modifiersPhysicallyHeld(preferences.hotKey.modifierFlags)
+        let heldAtShow = HoldToCommitDismiss.modifiersPhysicallyHeld(preferences.hotKey.modifierFlags)
+        let dismissor = HoldToCommitDismiss(
+            triggerFlags: preferences.hotKey.modifierFlags,
+            heldAtShow: heldAtShow
+        )
+        dismissor.onModifierRelease = { [weak self] in self?.onModifierRelease?() }
+        self.dismissor = dismissor
         mouseLocationAtShow = NSEvent.mouseLocation
 
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+        dismissor.beginSession()
         startDismissMonitors()
 
         // A quick tap can release the modifier before the panel is key and
         // the monitors are running; treat it as an immediate release (next
         // tick, so the controller finishes its pre-selection first).
-        if !triggerModifiersHeldSinceShow {
+        if !heldAtShow {
             DispatchQueue.main.async { [weak self] in
-                guard let self, panel.isVisible, !triggerModifiersHeldSinceShow else { return }
+                guard let self, panel.isVisible, dismissor === self.dismissor else { return }
                 onModifierRelease?()
             }
         }
@@ -94,7 +101,9 @@ public final class SwiftUIOverlay: ObservableObject {
     }
 
     public func hide() {
-        stopDismissMonitors()
+        dismissor?.endSession()
+        dismissor = nil
+        stopKeyMonitor()
         isShown = false
         panel.orderOut(nil)
     }
@@ -143,32 +152,8 @@ public final class SwiftUIOverlay: ObservableObject {
         return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main
     }
 
-    /// Only checks ⌘⌥⌃, mirroring the clamp in `HotKeySpec.modifierFlags`;
-    /// keep the two in sync.
-    private static func modifiersPhysicallyHeld(_ flags: NSEvent.ModifierFlags) -> Bool {
-        guard !flags.isEmpty else {
-            return false
-        }
-        let state = CGEventSource.flagsState(.combinedSessionState)
-        if flags.contains(.option), !state.contains(.maskAlternate) {
-            return false
-        }
-        if flags.contains(.command), !state.contains(.maskCommand) {
-            return false
-        }
-        if flags.contains(.control), !state.contains(.maskControl) {
-            return false
-        }
-        return true
-    }
-
     private func handleKey(_ event: NSEvent) -> Bool {
-        // A keyDown carrying the trigger modifiers proves they are held right
-        // now — re-arm release-to-commit even if the initial check missed it.
-        let triggerFlags = preferences.hotKey.modifierFlags
-        if !triggerFlags.isEmpty, event.modifierFlags.isSuperset(of: triggerFlags) {
-            triggerModifiersHeldSinceShow = true
-        }
+        dismissor?.noteKeyEvent(event)
 
         // Extra modifiers are tolerated by matches(_:) because the trigger
         // modifier is typically still held while the switcher is open.
@@ -230,7 +215,7 @@ public final class SwiftUIOverlay: ObservableObject {
     }
 
     private func startDismissMonitors() {
-        stopDismissMonitors()
+        stopKeyMonitor()
 
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, panel.isVisible else {
@@ -238,60 +223,12 @@ public final class SwiftUIOverlay: ObservableObject {
             }
             return handleKey(event) ? nil : event
         }
-
-        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            guard let self, panel.isVisible else {
-                return event
-            }
-            let triggerFlags = preferences.hotKey.modifierFlags
-            let held = !triggerFlags.isEmpty && event.modifierFlags.isSuperset(of: triggerFlags)
-            // Re-arm whenever the trigger modifier is pressed again, so a
-            // quick tap-to-open followed by hold-and-cycle still commits on
-            // release instead of silently disarming after the first release.
-            if held {
-                triggerModifiersHeldSinceShow = true
-            } else if triggerModifiersHeldSinceShow {
-                triggerModifiersHeldSinceShow = false
-                onModifierRelease?()
-            }
-            return event
-        }
-
-        // The local monitor only sees events while this app owns the key
-        // window; a release that happens after focus moved elsewhere would
-        // otherwise never commit. Poll the physical state as a fallback.
-        let watchdog = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.checkModifierWatchdog()
-            }
-        }
-        // .common so the poll keeps running during event tracking (drags,
-        // menus) — exactly the situations where the local monitor is blind.
-        watchdog.tolerance = 0.02
-        RunLoop.main.add(watchdog, forMode: .common)
-        modifierWatchdog = watchdog
     }
 
-    private func checkModifierWatchdog() {
-        guard panel.isVisible, triggerModifiersHeldSinceShow else {
-            return
-        }
-        if !Self.modifiersPhysicallyHeld(preferences.hotKey.modifierFlags) {
-            triggerModifiersHeldSinceShow = false
-            onModifierRelease?()
-        }
-    }
-
-    private func stopDismissMonitors() {
-        modifierWatchdog?.invalidate()
-        modifierWatchdog = nil
+    private func stopKeyMonitor() {
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil
-        }
-        if let flagsMonitor {
-            NSEvent.removeMonitor(flagsMonitor)
-            self.flagsMonitor = nil
         }
     }
 }
