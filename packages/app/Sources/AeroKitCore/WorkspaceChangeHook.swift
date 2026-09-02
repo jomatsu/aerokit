@@ -75,7 +75,7 @@ public enum WorkspaceChangeHook {
             else {
                 return .needsMerge
             }
-            return line[open ... close].contains(invocation) ? .wired : .needsMerge
+            return callsAeroKit(line[open ... close]) ? .wired : .needsMerge
         }
         if hasAssignmentLine(in: configText) {
             // Multi-line array: slice from the key to the first `]` across
@@ -87,9 +87,20 @@ public enum WorkspaceChangeHook {
             guard let close = afterKey.firstIndex(of: "]") else {
                 return .needsMerge
             }
-            return afterKey[..<close].contains(invocation) ? .wired : .needsMerge
+            return callsAeroKit(afterKey[..<close]) ? .wired : .needsMerge
         }
         return .absent
+    }
+
+    /// Token-level check: the invocation counts only as its own shell word
+    /// ("…; /path --workspace-changed"). A bare mention inside a longer
+    /// flag ("--workspace-changed-disabled") or an arbitrary argument does
+    /// not — the failure direction is always the safe one: manual
+    /// instructions instead of a false "Configured".
+    private static func callsAeroKit(_ slice: some StringProtocol) -> Bool {
+        slice
+            .split { $0 == " " || $0 == "\t" || $0 == ";" || $0 == "'" || $0 == "\"" }
+            .contains { $0 == invocation }
     }
 
     /// The hook line a fresh config needs. Paths containing a single quote

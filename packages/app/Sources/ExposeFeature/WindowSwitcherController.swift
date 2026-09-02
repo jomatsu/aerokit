@@ -334,6 +334,7 @@ public final class WindowSwitcherController {
         overlay.hide()
         session = nil
         pendingMoves = 0
+        commitOnLoad = false
         registerHotKeys()
     }
 
