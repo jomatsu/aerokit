@@ -50,6 +50,10 @@ public final class WindowSwitcherController {
         overlay.isVisible || presentTask != nil
     }
 
+    /// How many windows the strip shows. Recency order means the oldest
+    /// windows past this cap stay reachable via the exposé instead.
+    static let maxStripEntries = 12
+
     /// True when the settings window should open on launch: the switcher
     /// is enabled but its hotkey lost registration, leaving it unreachable.
     public var needsOnboarding: Bool {
@@ -191,19 +195,31 @@ public final class WindowSwitcherController {
             return
         }
 
-        let ordered = WindowRecencyOrdering.ordered(
-            windows: context.snapshot.windows,
-            stacking: context.stacking,
-            focusedID: context.focusedID
+        // Recency order, capped: extremely large workspaces would overflow
+        // any fixed-width strip; the oldest windows stay reachable via the
+        // exposé.
+        let ordered = Array(
+            WindowRecencyOrdering.ordered(
+                windows: context.snapshot.windows,
+                stacking: context.stacking,
+                focusedID: context.focusedID
+            )
+            .prefix(Self.maxStripEntries)
         )
         let icons = icons(for: ordered)
         let session = WindowCycleSession(windows: ordered, icons: icons)
         session.move(initial)
-        // Cycle taps that arrived during the load apply on top.
+        // Cycle taps that arrived during the load apply on top — every one
+        // of them, not just their net direction.
+        let extra = abs(pendingMoves)
         if pendingMoves > 0 {
-            session.move(.next)
+            for _ in 0 ..< extra {
+                session.move(.next)
+            }
         } else if pendingMoves < 0 {
-            session.move(.previous)
+            for _ in 0 ..< extra {
+                session.move(.previous)
+            }
         }
         pendingMoves = 0
         self.session = session
@@ -220,6 +236,10 @@ public final class WindowSwitcherController {
         }
 
         overlay.show(session: session, cardWidth: cardWidth(for: ordered.count, on: screen), on: screen)
+        // The fallback owns repeats via the panel from here; release Carbon.
+        if interceptor == nil {
+            unregisterHotKeys()
+        }
         startCaptures(session: session, screen: screen, bounds: context.bounds)
     }
 
@@ -414,7 +434,7 @@ public final class WindowSwitcherController {
     private func cardWidth(for count: Int, on screen: NSScreen) -> CGFloat {
         let spacing = WorkspaceCardMetrics.cellSpacing
         let available = screen.visibleFrame.width - 80 - spacing * CGFloat(max(count - 1, 0))
-        return max(90, min(WorkspaceCardMetrics.thumbSize.width, available / CGFloat(max(count, 1))))
+        return max(56, min(WorkspaceCardMetrics.thumbSize.width, available / CGFloat(max(count, 1))))
     }
 
     private func screen(for screenNumber: Int?) -> NSScreen? {

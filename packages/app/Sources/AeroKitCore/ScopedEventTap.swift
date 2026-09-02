@@ -70,6 +70,12 @@ public final class ScopedEventTap {
 
         guard let source = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
             CFMachPortInvalidate(tap)
+            // Balance the start() retention — stop() can't do it: self.tap
+            // was never assigned.
+            if let retained = retainedSelf {
+                retainedSelf = nil
+                Unmanaged<ScopedEventTap>.fromOpaque(retained).takeRetainedValue()
+            }
             return false
         }
         self.tap = tap

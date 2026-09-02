@@ -94,7 +94,11 @@ public enum WorkspaceChangeHook {
     /// quoting.
     public static func hookLine(executablePath: String) -> String {
         if executablePath.contains("'") {
-            return "\(key) = [\"\(executablePath)\", \"\(invocation)\"]"
+            // Basic strings escape backslashes and quotes.
+            let escaped = executablePath
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "\(key) = [\"\(escaped)\", \"\(invocation)\"]"
         }
         return "\(key) = ['\(executablePath)', '\(invocation)']"
     }

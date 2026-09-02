@@ -27,7 +27,10 @@ final class WindowSwitcherOverlay {
             self?.keyHandler?(event) ?? false
         }
         panel.onResignKey = { [weak self] in
-            self?.onCancel?()
+            // hide()'s orderOut also resigns key — don't re-enter dismiss
+            // from our own teardown.
+            guard let self, isVisible else { return }
+            onCancel?()
         }
     }
 

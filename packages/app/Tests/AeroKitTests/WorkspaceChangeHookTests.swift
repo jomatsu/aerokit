@@ -99,4 +99,10 @@ final class WorkspaceChangeHookTests: XCTestCase {
         let config = "exec-on-workspace-change = ['/bin/bash', '-c', 'sketchybar --reload &']\n"
         XCTAssertNil(WorkspaceChangeHook.mergedHookLine(configText: config, executablePath: "/opt/AeroKit"))
     }
+
+    func testHookLineQuotesApostrophePathsAsBasicStrings() {
+        let line = WorkspaceChangeHook.hookLine(executablePath: "/Users/o'brien/Apps/AeroKit")
+        XCTAssertTrue(line.contains("\"/Users/o'brien/Apps/AeroKit\""))
+        XCTAssertTrue(line.contains("\"--workspace-changed\"]"))
+    }
 }
