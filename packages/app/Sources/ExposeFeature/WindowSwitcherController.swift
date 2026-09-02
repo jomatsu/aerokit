@@ -120,26 +120,34 @@ public final class WindowSwitcherController {
     // MARK: - Open / close
 
     private func open(selecting initial: SelectionMove) {
-        guard !overlay.isVisible else {
+        if overlay.isVisible {
             session?.move(initial)
             return
         }
-        // Launch hotkeys unregistered while the strip is open: without the
-        // event tap, Carbon would re-fire on key repeats instead of letting
-        // them reach the panel.
-        unregisterHotKeys()
+        if presentTask != nil {
+            // A load is already in flight. On the fallback path Carbon is
+            // still registered and consumed this repeat; count it so it
+            // lands once the session arrives.
+            pendingMoves += initial == .next ? 1 : -1
+            return
+        }
 
         commitOnLoad = false
         pendingMoves = 0
-        // The tap (or fallback) must own the trigger key from now on, or
-        // auto-repeats during the CLI round trip would leak to the frontmost
-        // app and to AeroSpace's own alt-tab binding. And if the modifiers
-        // were already released in the dispatch hop before the tap existed,
-        // no flagsChanged will ever arrive — flag the commit up front.
+        // The tap must own the trigger key from here on — Carbon would only
+        // double-fire — and if the modifiers were already released in the
+        // dispatch hop before the tap existed, no flagsChanged will ever
+        // arrive: flag the commit up front. The fallback path keeps Carbon
+        // registered through the load (its repeats re-enter here and count
+        // as pending moves instead of leaking to apps) and unregisters once
+        // the panel is up.
         if !HoldToCommitDismiss.modifiersPhysicallyHeld(preferences.windowSwitchHotKey.modifierFlags) {
             commitOnLoad = true
         }
         startInteractions()
+        if interceptor != nil {
+            unregisterHotKeys()
+        }
 
         presentTask?.cancel()
         presentEpoch += 1
@@ -195,33 +203,7 @@ public final class WindowSwitcherController {
             return
         }
 
-        // Recency order, capped: extremely large workspaces would overflow
-        // any fixed-width strip; the oldest windows stay reachable via the
-        // exposé.
-        let ordered = Array(
-            WindowRecencyOrdering.ordered(
-                windows: context.snapshot.windows,
-                stacking: context.stacking,
-                focusedID: context.focusedID
-            )
-            .prefix(Self.maxStripEntries)
-        )
-        let icons = icons(for: ordered)
-        let session = WindowCycleSession(windows: ordered, icons: icons)
-        session.move(initial)
-        // Cycle taps that arrived during the load apply on top — every one
-        // of them, not just their net direction.
-        let extra = abs(pendingMoves)
-        if pendingMoves > 0 {
-            for _ in 0 ..< extra {
-                session.move(.next)
-            }
-        } else if pendingMoves < 0 {
-            for _ in 0 ..< extra {
-                session.move(.previous)
-            }
-        }
-        pendingMoves = 0
+        let session = makeSession(from: context, initial: initial, on: screen)
         self.session = session
 
         // The modifiers were released while the CLI round trip ran: commit
@@ -235,12 +217,52 @@ public final class WindowSwitcherController {
             return
         }
 
-        overlay.show(session: session, cardWidth: cardWidth(for: ordered.count, on: screen), on: screen)
+        overlay.show(session: session, cardWidth: cardWidth(for: session.entries.count, on: screen), on: screen)
         // The fallback owns repeats via the panel from here; release Carbon.
         if interceptor == nil {
             unregisterHotKeys()
         }
         startCaptures(session: session, screen: screen, bounds: context.bounds)
+    }
+
+    /// Builds the cycling session: recency order capped so huge workspaces
+    /// cannot overflow any fixed-width strip (the oldest windows stay
+    /// reachable via the exposé) — the cap also respects the minimum
+    /// card width that fits this screen — then the opening move and the
+    /// cycle taps that arrived during the load (every one of them, not
+    /// just their net direction).
+    private func makeSession(
+        from context: PresentationContext,
+        initial: SelectionMove,
+        on screen: NSScreen
+    ) -> WindowCycleSession {
+        let widthCap = max(
+            1,
+            Int((screen.visibleFrame.width - 32) / (56 + WorkspaceCardMetrics.cellSpacing))
+        )
+        let ordered = Array(
+            WindowRecencyOrdering.ordered(
+                windows: context.snapshot.windows,
+                stacking: context.stacking,
+                focusedID: context.focusedID
+            )
+            .prefix(min(Self.maxStripEntries, widthCap))
+        )
+        let icons = icons(for: ordered)
+        let session = WindowCycleSession(windows: ordered, icons: icons)
+        session.move(initial)
+        let extra = abs(pendingMoves)
+        if pendingMoves > 0 {
+            for _ in 0 ..< extra {
+                session.move(.next)
+            }
+        } else if pendingMoves < 0 {
+            for _ in 0 ..< extra {
+                session.move(.previous)
+            }
+        }
+        pendingMoves = 0
+        return session
     }
 
     private func commitRequest() {

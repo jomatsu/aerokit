@@ -70,9 +70,12 @@ public enum WorkspaceChangeHook {
         if let line = hookLineText(in: configText) {
             // Judge only the argv array — a trailing comment mentioning the
             // invocation must not fake "wired".
-            let arrayStart = line.firstIndex(of: "[") ?? line.startIndex
-            let array = line[arrayStart...]
-            return array.contains(invocation) ? .wired : .needsMerge
+            guard let open = line.firstIndex(of: "["),
+                  let close = line[open...].firstIndex(of: "]")
+            else {
+                return .needsMerge
+            }
+            return line[open ... close].contains(invocation) ? .wired : .needsMerge
         }
         if hasAssignmentLine(in: configText) {
             // Multi-line array: slice from the key to the first `]` across

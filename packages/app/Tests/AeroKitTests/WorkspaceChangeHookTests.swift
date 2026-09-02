@@ -39,6 +39,18 @@ final class WorkspaceChangeHookTests: XCTestCase {
         XCTAssertEqual(WorkspaceChangeHook.classify(configText: text), .needsMerge)
     }
 
+    func testTrailingCommentCannotFakeWired() {
+        // The invocation only counts inside the argv array, never in a
+        // trailing comment.
+        let text = "exec-on-workspace-change = ['/bin/bash', '-c', 'x'] # TODO add --workspace-changed\n"
+        XCTAssertEqual(WorkspaceChangeHook.classify(configText: text), .needsMerge)
+    }
+
+    func testMultilineWiredArrayClassifiesWired() {
+        let text = "exec-on-workspace-change = [\n  '/opt/AeroKit', '--workspace-changed'\n]\n"
+        XCTAssertEqual(WorkspaceChangeHook.classify(configText: text), .wired)
+    }
+
     func testHookLineFormat() {
         XCTAssertEqual(
             WorkspaceChangeHook.hookLine(executablePath: "/Applications/AeroKit.app/Contents/MacOS/AeroKit"),

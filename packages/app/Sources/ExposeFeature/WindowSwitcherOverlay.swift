@@ -21,15 +21,17 @@ final class WindowSwitcherOverlay {
         panel.isVisible
     }
 
+    /// True while hide() is ordering the panel out; its resign must not
+    /// re-enter onCancel/dismiss mid-teardown.
+    private var isHiding = false
+
     init() {
         panel = OverlayPanel(contentRect: .zero)
         panel.keyHandler = { [weak self] event in
             self?.keyHandler?(event) ?? false
         }
         panel.onResignKey = { [weak self] in
-            // hide()'s orderOut also resigns key — don't re-enter dismiss
-            // from our own teardown.
-            guard let self, isVisible else { return }
+            guard let self, isVisible, !isHiding else { return }
             onCancel?()
         }
     }
@@ -63,7 +65,9 @@ final class WindowSwitcherOverlay {
     }
 
     func hide() {
+        isHiding = true
         panel.orderOut(nil)
+        isHiding = false
         panel.contentView = nil
         hostingView = nil
     }
