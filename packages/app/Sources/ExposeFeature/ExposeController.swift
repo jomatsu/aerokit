@@ -188,7 +188,10 @@ public final class ExposeController {
 
     /// Everything the presentation needs from off-main queries: the
     /// workspace's windows, the focused window, and all window bounds.
-    private struct PresentationContext {
+    /// `@unchecked` because the preview/icon images are AppKit objects:
+    /// the context is built inside one nonisolated call, handed to the
+    /// main actor exactly once, and never mutated afterwards.
+    private struct PresentationContext: @unchecked Sendable {
         var snapshot: WorkspaceSnapshot
         var focusedWindowID: CGWindowID?
         var bounds: [CGWindowID: CGRect]
