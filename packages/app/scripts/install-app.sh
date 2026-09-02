@@ -4,6 +4,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/app-metadata.sh"
+# Dev installs use their own bundle identifier and app name so Screen
+# Recording / Accessibility grants, the login item, LaunchServices, and
+# the System Settings entries stay separate and recognizable next to the
+# Homebrew/release app at /Applications.
+export AEROKIT_BUNDLE_ID="${AEROKIT_BUNDLE_ID:-$DEV_BUNDLE_ID}"
+export AEROKIT_APP_NAME="${AEROKIT_APP_NAME:-$DEV_APP_NAME}"
+# Apply the overrides in this shell too: APP_NAME/APP_DIR drive where the
+# build lands and which processes get taken over.
+APP_NAME="$AEROKIT_APP_NAME"
+BUNDLE_ID="$AEROKIT_BUNDLE_ID"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/Applications}"
 APP_DIR="$INSTALL_DIR/$APP_NAME.app"
 LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
@@ -34,7 +44,14 @@ done
 # The app manages launch-at-login itself via SMAppService and migrates any
 # pre-existing com.nasubikun.aerokit LaunchAgent on first launch, so the
 # installer no longer writes one — it just (re)launches the fresh copy.
-/usr/bin/pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+# Take over from every sibling install: the release app ("AeroKit") and
+# any pre-rename dev copy.
+for RUNNING_NAME in "$APP_NAME" AeroKit; do
+  /usr/bin/pkill -x "$RUNNING_NAME" >/dev/null 2>&1 || true
+done
+if [[ "$APP_NAME" != "AeroKit" ]]; then
+  rm -rf "$INSTALL_DIR/AeroKit.app"
+fi
 rm -rf "$APP_DIR"
 mv "$STAGED_APP" "$APP_DIR"
 /usr/bin/open -g "$APP_DIR"

@@ -5,6 +5,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/app-metadata.sh"
+# AEROKIT_BUNDLE_ID / AEROKIT_APP_NAME let a development install use its
+# own identity and display name (install-app.sh sets both); release/CI
+# builds keep the defaults. The SPM product itself is always "AeroKit".
+APP_NAME="${AEROKIT_APP_NAME:-$APP_NAME}"
+BUNDLE_ID="${AEROKIT_BUNDLE_ID:-$BUNDLE_ID}"
 
 # Default to the single version source the binary itself compiles in, so a
 # local build can never disagree with `AeroKit --version`; CI overrides it
@@ -41,7 +46,7 @@ if [[ "${#BUILD_ARCHS[@]}" -eq 0 ]]; then
   exit 1
 fi
 
-BUILD_ARGS=(-c release --product "$APP_NAME")
+BUILD_ARGS=(-c release --product AeroKit)
 for arch in "${BUILD_ARCHS[@]}"; do
   case "$arch" in
     arm64|x86_64) BUILD_ARGS+=(--arch "$arch") ;;
@@ -55,7 +60,7 @@ done
 cd "$ROOT_DIR"
 swift build "${BUILD_ARGS[@]}"
 BIN_DIR="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)"
-BINARY="$BIN_DIR/$APP_NAME"
+BINARY="$BIN_DIR/AeroKit"
 
 if [[ ! -x "$BINARY" ]]; then
   echo "Built executable not found: $BINARY" >&2

@@ -65,14 +65,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         // taps. LaunchServices dedups `open` launches of the same bundle;
         // this catches raw-binary or second-copy launches it doesn't see.
         let current = NSRunningApplication.current
+        let executableName = current.executableURL?.lastPathComponent
         let duplicate = NSWorkspace.shared.runningApplications.contains { app in
             guard app.processIdentifier != current.processIdentifier else { return false }
-            if let bundleID = Bundle.main.bundleIdentifier {
-                return app.bundleIdentifier == bundleID
+            if app.bundleIdentifier == current.bundleIdentifier {
+                return true
             }
-            // Raw-binary runs (swift run / .build) have no bundle identifier;
-            // match by executable name instead.
-            return app.executableURL?.lastPathComponent == "AeroKit"
+            // Dev ("AeroKit Dev") and release ("AeroKit") installs use
+            // different bundle identifiers on purpose, but they fight over
+            // the same hotkeys and event taps — the shared name family
+            // means the other install is running.
+            if let executableName, executableName.hasPrefix("AeroKit"),
+               app.executableURL?.lastPathComponent.hasPrefix("AeroKit") == true
+            {
+                return true
+            }
+            return false
         }
         if duplicate {
             fputs("AeroKit: another instance is already running; exiting\n", stderr)
