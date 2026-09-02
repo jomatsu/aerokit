@@ -64,6 +64,12 @@ public final class SwipeController {
     /// should run whenever this fires.
     public var onSwipePreferenceChanged: (() -> Void)?
 
+    /// Fired on the main actor after a swipe commit actually switched the
+    /// workspace. The coordinator routes it to the snapshot pipeline so
+    /// thumbnails refresh the way they do after a switcher commit —
+    /// swiping used to leave previews stale.
+    public var onWorkspaceSwitched: (() -> Void)?
+
     public var wantsSwipeGestures: Bool {
         preferences.isEnabled
     }
@@ -282,7 +288,7 @@ public final class SwipeController {
             // Mark before the switch lands: the hook may fire for it before
             // the command returns, and its echo must find the timestamp set.
             self?.lastOwnCommitAt = .now
-            await BlockingWork.run {
+            let switched: Bool = await BlockingWork.run {
                 do {
                     try client.switchToWorkspace(plan.target)
                     // What AeroSpace reports right after the switch: a
@@ -290,9 +296,14 @@ public final class SwipeController {
                     // going wrong, not a later external actor.
                     let landed = (try? client.focusedWorkspaceName()).flatMap(\.self)
                     log.notice("swipe landed: \(landed ?? "unknown") (committed: \(plan.target))")
+                    return true
                 } catch {
                     log.error("swipe workspace switch failed: \(error)")
+                    return false
                 }
+            }
+            if switched, let self {
+                onWorkspaceSwitched?()
             }
             self?.verifyFocus(after: plan.target, epoch: epoch)
         }

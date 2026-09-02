@@ -82,6 +82,12 @@ final class AppCoordinator {
         }
         expose.onSwipePreferenceChanged = { [weak self] in self?.updateSwipeMonitor() }
         swipe.onSwipePreferenceChanged = { [weak self] in self?.updateSwipeMonitor() }
+        // Swipes switch workspaces outside the switcher's own pipeline;
+        // route the commit to the snapshot refresh those commits trigger,
+        // so swipe-landed previews don't go stale.
+        swipe.onWorkspaceSwitched = { [weak self] in
+            self?.switcher.scheduleSnapshotRefreshForWorkspaceChange()
+        }
         updateSwipeMonitor()
         showOnboardingIfNeeded()
     }

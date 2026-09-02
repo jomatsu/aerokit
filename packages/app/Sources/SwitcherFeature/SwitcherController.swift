@@ -384,12 +384,20 @@ extension SwitcherController {
         switch result {
         case .success:
             refreshWorkspacesAsync()
-            if configuration.snapshotRefreshEnabled {
-                snapshotScheduler.schedule(reason: .workspaceChange)
-            }
+            scheduleSnapshotRefreshForWorkspaceChange()
         case let .failure(error):
             logError("Failed to switch workspace \(name): \(error)")
         }
+    }
+
+    /// Snapshot refresh after a workspace change made outside the
+    /// switcher — swipes, keybindings. Same settle path as this
+    /// switcher's own commits, so captures see the post-switch state.
+    public func scheduleSnapshotRefreshForWorkspaceChange() {
+        guard configuration.snapshotRefreshEnabled else {
+            return
+        }
+        snapshotScheduler.schedule(reason: .workspaceChange)
     }
 
     private func refreshWorkspacesAsync() {
