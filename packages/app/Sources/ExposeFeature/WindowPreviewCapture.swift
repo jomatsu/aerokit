@@ -71,20 +71,42 @@ enum WindowPreviewCapture {
         }
         // Sequential on purpose: the fallback is rare and
         // SCScreenshotManager captures serialize in replayd anyway.
-        guard let shareable = try? await request.capturer.shareableWindows() else {
-            return
+        let fallbackImages = await captureFallback(
+            capturer: request.capturer,
+            missed: missed,
+            displayScale: request.displayScale,
+            maxDimension: request.maxDimension
+        )
+        for (id, image) in fallbackImages {
+            deliver(id, image)
         }
+    }
+
+    /// SCK pass for windows the fast path could not read. Nonisolated on
+    /// purpose: ScreenCaptureKit objects stay inside this function, and
+    /// only Sendable results (window id + CGImage) cross back.
+    private nonisolated static func captureFallback(
+        capturer: WindowImageCapturer,
+        missed: [CGWindowID],
+        displayScale: CGFloat,
+        maxDimension: CGFloat
+    ) async -> [(CGWindowID, CGImage)] {
+        guard let shareable = try? await capturer.shareableWindows() else {
+            return []
+        }
+        var images: [(CGWindowID, CGImage)] = []
         for id in missed {
             guard !Task.isCancelled, let window = shareable[id] else {
                 continue
             }
-            if let image = try? await request.capturer.captureImage(
+            if let image = try? await capturer.captureImage(
                 of: window,
-                displayScale: request.displayScale,
-                maxDimension: request.maxDimension
+                displayScale: displayScale,
+                maxDimension: maxDimension
             ) {
-                deliver(id, image)
+                images.append((id, image))
             }
         }
+        return images
     }
 }
