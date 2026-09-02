@@ -5,14 +5,29 @@ import Foundation
 /// `deliverImmediately` is required: the running instance is a background
 /// (accessory) app, and suspended apps only receive coalesced distributed
 /// notifications once they become active — which a menu-bar app never does.
-private func postAndExit(_ name: Notification.Name) -> Never {
+private func postAndExit(_ name: Notification.Name, userInfo: [String: String]? = nil) -> Never {
     DistributedNotificationCenter.default().postNotificationName(
         name,
         object: nil,
-        userInfo: nil,
+        userInfo: userInfo,
         deliverImmediately: true
     )
     exit(0)
+}
+
+/// AeroSpace hands the exec-on-workspace-change hook the changed
+/// workspaces in the environment; the running instance re-reads focus
+/// itself, so the payload is informational.
+private func workspaceChangeUserInfo() -> [String: String] {
+    let environment = ProcessInfo.processInfo.environment
+    var userInfo: [String: String] = [:]
+    if let workspace = environment["AEROSPACE_WORKSPACE"], !workspace.isEmpty {
+        userInfo["workspace"] = workspace
+    }
+    if let previous = environment["AEROSPACE_PREV_WORKSPACE"], !previous.isEmpty {
+        userInfo["previous"] = previous
+    }
+    return userInfo
 }
 
 if CommandLine.arguments.contains("--version") {
@@ -30,6 +45,10 @@ if CommandLine.arguments.contains("--toggle-expose") {
 
 if CommandLine.arguments.contains("--toggle-app-expose") {
     postAndExit(AeroKitNotification.toggleAppExpose)
+}
+
+if CommandLine.arguments.contains("--workspace-changed") {
+    postAndExit(AeroKitNotification.workspaceChanged, userInfo: workspaceChangeUserInfo())
 }
 
 @MainActor
@@ -67,14 +86,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.start()
         self.coordinator = coordinator
 
-        observers.append(observe(AeroKitNotification.openSettings) { [weak self] in
+        observers.append(observe(AeroKitNotification.openSettings) { [weak self] _ in
             self?.coordinator?.showSettings()
         })
-        observers.append(observe(AeroKitNotification.toggleExpose) { [weak self] in
+        observers.append(observe(AeroKitNotification.toggleExpose) { [weak self] _ in
             self?.coordinator?.toggleExpose()
         })
-        observers.append(observe(AeroKitNotification.toggleAppExpose) { [weak self] in
+        observers.append(observe(AeroKitNotification.toggleAppExpose) { [weak self] _ in
             self?.coordinator?.toggleAppExpose()
+        })
+        observers.append(observe(AeroKitNotification.workspaceChanged) { [weak self] userInfo in
+            self?.coordinator?.showWorkspaceChangeHUD(
+                workspace: userInfo["workspace"],
+                previous: userInfo["previous"]
+            )
         })
     }
 
@@ -82,17 +107,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// Distributed payloads are plain strings here, so the observer hands
+    /// the handler a Sendable dictionary instead of the non-Sendable
+    /// Notification — the values are extracted on the posting hop's queue
+    /// before the main-actor task captures them.
     private func observe(
         _ name: Notification.Name,
-        _ handler: @escaping @MainActor () -> Void
+        _ handler: @escaping @MainActor ([String: String]) -> Void
     ) -> any NSObjectProtocol {
         DistributedNotificationCenter.default().addObserver(
             forName: name,
             object: nil,
             queue: .main
-        ) { _ in
+        ) { notification in
+            let userInfo = notification.userInfo as? [String: String]
             Task { @MainActor in
-                handler()
+                handler(userInfo ?? [:])
             }
         }
     }

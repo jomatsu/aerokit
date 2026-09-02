@@ -172,6 +172,14 @@ final class AppCoordinator {
         expose.toggleAppWindows()
     }
 
+    /// A workspace change from outside AeroKit — the exec-on-workspace-change
+    /// hook reports the user's own AeroSpace keybindings, CLI switches, and
+    /// other automation. Swipe decides whether the strip flashes.
+    func showWorkspaceChangeHUD(workspace: String?, previous: String?) {
+        log.notice("workspace changed outside AeroKit: \(previous ?? "?") → \(workspace ?? "?")")
+        swipe.showWorkspaceChangeHUD()
+    }
+
     private func dispatch(_ role: HotKeyRole) {
         switch role {
         case .cycleForward, .cycleBackward, .escape:

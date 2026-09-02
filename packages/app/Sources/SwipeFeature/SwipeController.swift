@@ -51,6 +51,14 @@ public final class SwipeController {
     private var commitEpoch = 0
     private var gestureActive = false
     private var latestOffset: CGFloat = 0
+    /// Set when this controller's own swipe commits a switch: the
+    /// exec-on-workspace-change hook reports that same change a moment
+    /// later, and its flash would be an echo of the settle already on
+    /// screen (see WorkspaceChangeFlash).
+    private var lastOwnCommitAt: ContinuousClock.Instant?
+    /// Discards a workspace-change flash whose ring load finished after a
+    /// newer flash (or gesture) took over the panel.
+    private var flashEpoch = 0
 
     /// The coordinator re-evaluates whether the shared trackpad monitor
     /// should run whenever this fires.
@@ -115,10 +123,14 @@ public final class SwipeController {
         SwipeSettingsView(
             model: settingsModel,
             preferences: preferences,
-            workspaceOrder: workspaceOrderStore
-        ) { [client] in
-            try client.workspaceOrderEntries()
-        }
+            workspaceOrder: workspaceOrderStore,
+            loadWorkspaces: { [client] in
+                try client.workspaceOrderEntries()
+            },
+            reloadAerospaceConfig: { [client] in
+                try client.reloadConfig()
+            }
+        )
     }
 
     /// Reflects the shared monitor's state in this feature's settings pane.
@@ -153,6 +165,9 @@ public final class SwipeController {
     private func beginGesture() {
         gestureActive = true
         latestOffset = 0
+        // A flash whose ring load is still in flight would settle onto the
+        // panel under the gesture's own strip — its epoch is done.
+        flashEpoch += 1
 
         let client = client
         let skipEmpty = preferences.skipEmpty
@@ -264,6 +279,9 @@ public final class SwipeController {
             guard let plan else {
                 return
             }
+            // Mark before the switch lands: the hook may fire for it before
+            // the command returns, and its echo must find the timestamp set.
+            self?.lastOwnCommitAt = .now
             await BlockingWork.run {
                 do {
                     try client.switchToWorkspace(plan.target)
@@ -278,6 +296,77 @@ public final class SwipeController {
             }
             self?.verifyFocus(after: plan.target, epoch: epoch)
         }
+    }
+
+    /// Flashes the settled strip for a workspace change AeroKit didn't
+    /// perform — the user's own AeroSpace keybindings or any other actor,
+    /// surfaced by the optional exec-on-workspace-change hook. The ring and
+    /// previews load off the main actor exactly like a gesture's, so the
+    /// strip appears with real thumbnails in one pass; icons stream in
+    /// behind it. Rapid switches supersede each other instead of racing:
+    /// only the newest request may present. Keyboard flashes don't need
+    /// the trackpad, so only the strip visibility preference gates them.
+    public func showWorkspaceChangeHUD() {
+        guard preferences.showHUD else {
+            return
+        }
+        guard shouldShowFlash() else {
+            return
+        }
+
+        flashEpoch += 1
+        let epoch = flashEpoch
+        let client = client
+        let skipEmpty = preferences.skipEmpty
+        let order = workspaceOrderStore.order
+        let wrapAround = preferences.wrapAround
+        let preview = workspacePreview
+
+        Task { [weak self] in
+            let loaded = await BlockingWork.run { () -> (ring: Ring, previews: [String: NSImage])? in
+                guard let ring = Self.loadRing(client: client, skipEmpty: skipEmpty, order: order) else {
+                    return nil
+                }
+                let previews = ring.workspaces.reduce(into: [String: NSImage]()) { $0[$1] = preview($1) }
+                return (ring: ring, previews: previews)
+            }
+            guard let self, let loaded, epoch == flashEpoch, shouldShowFlash() else {
+                return
+            }
+            currentPreviews = loaded.previews
+            hud.settle(
+                workspaces: loaded.ring.workspaces,
+                current: loaded.ring.current,
+                previews: loaded.previews,
+                wrapsAround: wrapAround
+            )
+        }
+
+        // Icons load behind the strip and stream in when ready, same as a
+        // gesture; cancelling keeps a slow older load from overwriting a
+        // newer flash's icons.
+        iconTask?.cancel()
+        let resolver = iconResolver
+        iconTask = Task { [weak self] in
+            let icons = await BlockingWork.run {
+                Self.loadIcons(client: client, resolver: resolver)
+            }
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            hud.updateIcons(icons)
+        }
+    }
+
+    /// Re-checked both when the flash request arrives and when its ring
+    /// load returns: a gesture may have started, or one of our own swipes
+    /// committed, while the load was in flight.
+    private func shouldShowFlash() -> Bool {
+        WorkspaceChangeFlash.shouldShow(
+            gestureActive: gestureActive,
+            lastOwnCommit: lastOwnCommitAt,
+            now: .now
+        )
     }
 
     /// Reads focus back one second after a commit landed. If it moved off

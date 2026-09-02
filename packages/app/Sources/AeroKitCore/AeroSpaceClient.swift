@@ -101,6 +101,11 @@ public final class AeroSpaceClient: Sendable {
         _ = try run(["workspace", name])
     }
 
+    /// Applies an edited config without waiting for an AeroSpace restart.
+    public func reloadConfig() throws {
+        _ = try run(["reload-config"])
+    }
+
     // MARK: - Key bindings
 
     /// Workspace name → key combo (e.g. "alt-1") from the config's main-mode

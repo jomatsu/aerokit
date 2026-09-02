@@ -38,6 +38,23 @@ focused app across workspaces, then jump directly to the one you need.
 Move between workspaces with a natural three-finger swipe and a compact HUD
 that follows the gesture.
 
+The strip can also flash for workspace switches you make outside AeroKit —
+your own AeroSpace keybindings, the CLI, other automation. AeroKit never
+edits your AeroSpace config: Settings › Swipe › Keyboard Switches shows the
+exact line for your install (already merged into an existing hook when one
+runs) — copy it into `~/.aerospace.toml` yourself and reload:
+
+```toml
+exec-on-workspace-change = ['/Applications/AeroKit.app/Contents/MacOS/AeroKit', '--workspace-changed']
+```
+
+`exec-on-workspace-change` runs a single command, so if you already use it
+(e.g. for SketchyBar), chain AeroKit into the same shell string:
+
+```toml
+exec-on-workspace-change = ['/bin/bash', '-c', 'sketchybar --trigger aerospace_workspace_change FOCUSED=$AEROSPACE_WORKSPACE; /Applications/AeroKit.app/Contents/MacOS/AeroKit --workspace-changed']
+```
+
 ## Requirements
 
 - macOS 14 (Sonoma) or later
