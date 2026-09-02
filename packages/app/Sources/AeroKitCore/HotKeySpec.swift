@@ -55,6 +55,22 @@ public struct HotKeySpec: Codable, Equatable, Sendable {
         return result
     }
 
+    /// The modifiers as CGEventFlags, for event-tap flag matching.
+    public var cgEventFlags: CGEventFlags {
+        var result: CGEventFlags = []
+        let flags = modifierFlags
+        if flags.contains(.control) {
+            result.insert(.maskControl)
+        }
+        if flags.contains(.option) {
+            result.insert(.maskAlternate)
+        }
+        if flags.contains(.command) {
+            result.insert(.maskCommand)
+        }
+        return result
+    }
+
     /// Keycap strings for display, e.g. ["⌥", "`"].
     public var displayKeys: [String] {
         var keys: [String] = []

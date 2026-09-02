@@ -20,6 +20,7 @@ final class AppCoordinator {
     private let workspaceOrder = WorkspaceOrderStore()
     private let switcher: SwitcherController
     private let expose: ExposeController
+    private let windowSwitcher: WindowSwitcherController
     private let swipe: SwipeController
     /// Shared because only one monitor can observe the trackpad: vertical
     /// swipes go to exposé, horizontal ones to the workspace switcher.
@@ -35,7 +36,15 @@ final class AppCoordinator {
 
         client = AeroSpaceClient(executablePath: AeroSpaceClient.detectExecutablePath())
         switcher = SwitcherController(hotKeyCenter: hotKeyCenter, workspaceOrder: workspaceOrder)
-        expose = ExposeController(client: client, hotKeyCenter: hotKeyCenter)
+        let exposePreferences = ExposePreferences()
+        // The window switcher shares the exposé's pipeline and preference
+        // store; one preferences instance keeps their hotkeys coherent.
+        expose = ExposeController(client: client, hotKeyCenter: hotKeyCenter, preferences: exposePreferences)
+        windowSwitcher = WindowSwitcherController(
+            client: client,
+            hotKeyCenter: hotKeyCenter,
+            preferences: exposePreferences
+        )
         // The swipe HUD and the exposé's drag-to-workspace drop bar both
         // reuse the switcher's workspace snapshots as thumbnail previews;
         // the Sendable lookup lets each feature decode them off the main
@@ -66,6 +75,7 @@ final class AppCoordinator {
 
         switcher.start()
         expose.start()
+        windowSwitcher.start()
         swipe.start()
 
         swipeMonitor.onSwipeEvent = { [weak self] event in
@@ -98,7 +108,7 @@ final class AppCoordinator {
     /// window when any feature raises its flag. Checked after the features
     /// started — that's when hotkeys registered and the flags are accurate.
     private func showOnboardingIfNeeded() {
-        guard switcher.needsOnboarding || expose.needsOnboarding else {
+        guard switcher.needsOnboarding || expose.needsOnboarding || windowSwitcher.needsOnboarding else {
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
@@ -178,11 +188,12 @@ final class AppCoordinator {
         expose.toggleAppWindows()
     }
 
-    /// A workspace change from outside AeroKit — the exec-on-workspace-change
-    /// hook reports the user's own AeroSpace keybindings, CLI switches, and
-    /// other automation. Swipe decides whether the strip flashes.
+    /// The external workspace change surfaced by the coordinator (exec hook
+    /// notification) invalidates the strip: its windows describe a
+    /// workspace that is no longer in front.
     func showWorkspaceChangeHUD(workspace: String?, previous: String?) {
         log.notice("workspace changed outside AeroKit: \(previous ?? "?") → \(workspace ?? "?")")
+        windowSwitcher.cancelIfActive()
         swipe.showWorkspaceChangeHUD()
     }
 
@@ -194,6 +205,13 @@ final class AppCoordinator {
             expose.toggle()
         case .exposeAppToggle:
             expose.toggleAppWindows()
+        case .windowCycleForward, .windowCycleBackward:
+            // The strip defers to whichever overlay owns the screen first;
+            // the two fight over the same key events.
+            guard !expose.isActive, !switcher.isActive else {
+                break
+            }
+            windowSwitcher.handle(role)
         }
     }
 }

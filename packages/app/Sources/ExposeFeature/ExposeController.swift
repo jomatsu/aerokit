@@ -54,6 +54,12 @@ public final class ExposeController {
         preferences.threeFingerSwipe
     }
 
+    /// True while an overview is visible or being loaded — the window
+    /// switcher defers to it (the two fight over the same key events).
+    public var isActive: Bool {
+        overlay.isVisible || presentTask != nil
+    }
+
     /// True when the settings window should open on launch: ⌥-digit quick
     /// select is enabled (the default) but lacks the Accessibility grant it
     /// needs — the feature would otherwise silently do nothing — or a
@@ -66,10 +72,10 @@ public final class ExposeController {
             || settingsModel.appHotKeyErrorMessage != nil
     }
 
-    public init(client: AeroSpaceClient, hotKeyCenter: HotKeyCenter) {
+    public init(client: AeroSpaceClient, hotKeyCenter: HotKeyCenter, preferences: ExposePreferences) {
         self.client = client
         self.hotKeyCenter = hotKeyCenter
-        preferences = ExposePreferences()
+        self.preferences = preferences
     }
 
     public func start() {

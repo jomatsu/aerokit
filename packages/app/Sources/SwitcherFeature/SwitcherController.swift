@@ -16,6 +16,13 @@ public final class SwitcherController {
     private let snapshotScheduler: SnapshotRefreshScheduler
     private let iconResolver: AppIconResolver
     private let overlay: SwiftUIOverlay
+
+    /// True while the workspace switcher overlay is up — the window
+    /// switcher defers to it (the two fight over the same key events).
+    public var isActive: Bool {
+        overlay.isVisible
+    }
+
     private let hotKeyCenter: HotKeyCenter
     private let settingsModel: SwitcherSettingsModel
 
@@ -128,7 +135,7 @@ public final class SwitcherController {
             cycle(.previous)
         case .escape:
             hide()
-        case .exposeToggle, .exposeAppToggle:
+        case .exposeToggle, .exposeAppToggle, .windowCycleForward, .windowCycleBackward:
             break
         }
     }

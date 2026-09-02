@@ -117,6 +117,8 @@ public enum HotKeyRole: UInt32, Sendable {
     case cycleBackward = 3
     case exposeToggle = 4
     case exposeAppToggle = 5
+    case windowCycleForward = 6
+    case windowCycleBackward = 7
 }
 
 public enum HotKeyError: Error, CustomStringConvertible {

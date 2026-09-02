@@ -18,6 +18,12 @@ public final class ExposePreferences: ObservableObject {
         keyLabel: "A"
     )
 
+    public static let defaultWindowSwitchHotKey = HotKeySpec(
+        keyCode: UInt16(kVK_Tab),
+        modifierRawValue: NSEvent.ModifierFlags.option.rawValue,
+        keyLabel: "\u{21e5}"
+    )
+
     @Published public var hotKey: HotKeySpec {
         didSet { hotKey.store(in: defaults, key: Keys.hotKey) }
     }
@@ -70,6 +76,18 @@ public final class ExposePreferences: ObservableObject {
         didSet { defaults.set(threeFingerSwipe, forKey: Keys.threeFingerSwipe) }
     }
 
+    /// ⌥Tab-style cycling over the focused workspace's windows. Ships off:
+    /// AeroSpace's stock config already binds alt-tab, so an on-by-default
+    /// ⌥Tab would collide out of the box.
+    @Published public var windowSwitchEnabled: Bool {
+        didSet { defaults.set(windowSwitchEnabled, forKey: Keys.windowSwitchEnabled) }
+    }
+
+    /// Activation hotkey for the window switcher.
+    @Published public var windowSwitchHotKey: HotKeySpec {
+        didSet { windowSwitchHotKey.store(in: defaults, key: Keys.windowSwitchHotKey) }
+    }
+
     private let defaults: UserDefaults
 
     private enum Keys {
@@ -81,6 +99,8 @@ public final class ExposePreferences: ObservableObject {
         static let showGroupToggleHint = "expose.showGroupToggleHint"
         static let followMovedWindow = "expose.followMovedWindow"
         static let threeFingerSwipe = "expose.threeFingerSwipe"
+        static let windowSwitchEnabled = "expose.windowSwitchEnabled"
+        static let windowSwitchHotKey = "expose.windowSwitchHotKey"
     }
 
     public init(defaults: UserDefaults = .standard) {
@@ -94,5 +114,8 @@ public final class ExposePreferences: ObservableObject {
         showGroupToggleHint = defaults.object(forKey: Keys.showGroupToggleHint) as? Bool ?? true
         followMovedWindow = defaults.bool(forKey: Keys.followMovedWindow)
         threeFingerSwipe = defaults.object(forKey: Keys.threeFingerSwipe) as? Bool ?? true
+        windowSwitchEnabled = defaults.object(forKey: Keys.windowSwitchEnabled) as? Bool ?? false
+        windowSwitchHotKey = HotKeySpec.load(from: defaults, key: Keys.windowSwitchHotKey)
+            ?? Self.defaultWindowSwitchHotKey
     }
 }
