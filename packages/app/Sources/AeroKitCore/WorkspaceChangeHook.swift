@@ -43,12 +43,34 @@ public enum WorkspaceChangeHook {
 
     /// Line-scoped on purpose: a commented-out key means "not wired", and
     /// TOML allows the key only once, so the first active assignment is
-    /// authoritative.
+    /// authoritative. A trailing comment after the array is fine; a
+    /// multi-line array (no `]` on the key's line) is an assignment this
+    /// parser can't read — classify() routes it to manual instructions
+    /// rather than "not wired", so the pane never suggests a duplicate key.
+    private static func hookLineText(in configText: String) -> String? {
+        // [^\]\n] keeps the match on the key's line: a multi-line array is
+        // an assignment the merger can't reconstruct.
+        let pattern = "(?m)^\\s*" + key + "\\s*=\\s*\\[[^\\]\\n]*\\]\\s*(#.*)?$"
+        guard let range = configText.range(of: pattern, options: .regularExpression) else {
+            return nil
+        }
+        return String(configText[range])
+    }
+
+    /// The key is assigned in a layout this parser can't read (e.g. a
+    /// multi-line array) — still an assignment, so never "absent".
+    private static func hasAssignmentLine(in configText: String) -> Bool {
+        configText.range(of: "(?m)^\\s*" + key + "\\s*=", options: .regularExpression) != nil
+    }
+
     public static func classify(configText: String?) -> Wiring {
-        guard let configText, let line = hookLineText(in: configText) else {
+        guard let configText else {
             return .absent
         }
-        return line.contains(invocation) ? .wired : .needsMerge
+        if let line = hookLineText(in: configText) {
+            return line.contains(invocation) ? .wired : .needsMerge
+        }
+        return hasAssignmentLine(in: configText) ? .needsMerge : .absent
     }
 
     /// The hook line a fresh config needs.
@@ -179,16 +201,6 @@ public enum WorkspaceChangeHook {
             }
             return QuotedElement(quote: quote, content: String(literal.dropFirst().dropLast()))
         }
-    }
-
-    /// The active exec-on-workspace-change assignment line, if any. `.*`
-    /// stays on one line, so multi-line arrays don't match.
-    private static func hookLineText(in configText: String) -> String? {
-        let pattern = "(?m)^\\s*" + key + "\\s*=\\s*\\[.*\\]\\s*$"
-        guard let range = configText.range(of: pattern, options: .regularExpression) else {
-            return nil
-        }
-        return String(configText[range])
     }
 
     // MARK: - Filesystem (read-only; blocking, call off the main actor)

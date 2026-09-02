@@ -26,7 +26,9 @@ public final class WindowCycleSession {
     public init(windows: [ExposeWindow], icons: [CGWindowID: NSImage]) {
         let built = windows.map { Entry(window: $0, icon: icons[$0.id], image: nil) }
         entries = built
-        selectedIndex = built.count > 1 ? 1 : 0
+        // Index 0 is the focused window; the controller applies the opening
+        // move on top of it, so a forward tap lands on the previous window.
+        selectedIndex = 0
     }
 
     public var selectedEntry: Entry? {

@@ -33,10 +33,17 @@ public final class WindowSwitcherController {
     /// Bumped by every open/dismiss so a presentation superseded while
     /// waiting on the CLI can tell and drop its stale result.
     private var presentEpoch = 0
+    /// Set when the trigger modifiers were released while the presentation
+    /// was still loading: the strip then commits as soon as it lands
+    /// instead of appearing for a hand that is already gone.
+    private var commitOnLoad = false
     private var cancellables: Set<AnyCancellable> = []
 
+    /// Active while the strip is visible *or* a presentation is loading —
+    /// the load window is exactly when the trigger can be released, the
+    /// hook's echo can arrive, or a competing overlay can start.
     public var isActive: Bool {
-        overlay.isVisible
+        overlay.isVisible || presentTask != nil
     }
 
     /// True when the settings window should open on launch: the switcher
@@ -114,6 +121,14 @@ public final class WindowSwitcherController {
         // them reach the panel.
         unregisterHotKeys()
 
+        // Interactions start before the load, not after it: the tap (or
+        // fallback) must own the trigger key from now on, or auto-repeats
+        // during the CLI round trip would leak to the frontmost app and to
+        // AeroSpace's own alt-tab binding.
+        startInteractions()
+        commitOnLoad = false
+
+        presentTask?.cancel()
         presentEpoch += 1
         let epoch = presentEpoch
         presentTask = Task { [weak self] in
@@ -121,17 +136,36 @@ public final class WindowSwitcherController {
         }
     }
 
+    /// Everything the presentation needs from off-main queries: two CLI
+    /// round trips plus the synchronous WindowServer ones.
+    private struct PresentationContext {
+        var snapshot: WorkspaceSnapshot
+        var focusedID: CGWindowID?
+        var stacking: [CGWindowID]
+        var bounds: [CGWindowID: CGRect]
+    }
+
     private func present(epoch: Int, initial: SelectionMove) async {
         let client = client
-        let context: (snapshot: WorkspaceSnapshot, focusedID: CGWindowID?)? = await BlockingWork.run {
+        let capturer = capturer
+        // Everything off-main in one BlockingWork hop: two CLI round trips
+        // plus the WindowServer queries, which are synchronous and would
+        // otherwise block the main actor.
+        let context: PresentationContext? = await BlockingWork.run {
             guard let snapshot = try? client.focusedWorkspaceWindows(), !snapshot.windows.isEmpty else {
                 return nil
             }
-            return (snapshot, client.focusedWindow()?.id)
+            return PresentationContext(
+                snapshot: snapshot,
+                focusedID: client.focusedWindow()?.id,
+                stacking: capturer.onScreenWindowIDsFrontToBack(),
+                bounds: capturer.windowBoundsByID()
+            )
         }
-        let stacking = await capturer.onScreenWindowIDsFrontToBack()
 
-        guard epoch == presentEpoch else {
+        // A cancel during the load bumps the epoch; the cancelled task must
+        // not resurrect a strip or re-register anything.
+        guard epoch == presentEpoch, !Task.isCancelled else {
             return
         }
         presentTask = nil
@@ -148,16 +182,38 @@ public final class WindowSwitcherController {
 
         let ordered = WindowRecencyOrdering.ordered(
             windows: context.snapshot.windows,
-            stacking: stacking,
+            stacking: context.stacking,
             focusedID: context.focusedID
         )
         let icons = icons(for: ordered)
         let session = WindowCycleSession(windows: ordered, icons: icons)
         session.move(initial)
         self.session = session
+
+        // The modifiers were released while the CLI round trip ran: commit
+        // the landed selection without showing a strip for a hand that is
+        // already gone.
+        if commitOnLoad {
+            commitOnLoad = false
+            let id = session.selectedEntry?.window.id
+            dismiss()
+            focus(id: id)
+            return
+        }
+
         overlay.show(session: session, cardWidth: cardWidth(for: ordered.count, on: screen), on: screen)
-        startCaptures(session: session, screen: screen)
-        startInteractions()
+        startCaptures(session: session, screen: screen, bounds: context.bounds)
+    }
+
+    /// The release signal, from either the tap or the fallback dismissor:
+    /// commit now when the strip is up; if the release happened during the
+    /// load, flag the presentation to commit as soon as it lands.
+    private func commitRequest() {
+        if overlay.isVisible {
+            commit()
+        } else if presentTask != nil {
+            commitOnLoad = true
+        }
     }
 
     private func commit() {
@@ -166,6 +222,10 @@ public final class WindowSwitcherController {
         }
         let id = session.selectedEntry?.window.id
         dismiss()
+        focus(id: id)
+    }
+
+    private func focus(id: CGWindowID?) {
         guard let id else {
             return
         }
@@ -182,7 +242,7 @@ public final class WindowSwitcherController {
     }
 
     private func cancel() {
-        guard overlay.isVisible else {
+        guard isActive else {
             return
         }
         dismiss()
@@ -214,7 +274,7 @@ public final class WindowSwitcherController {
         if interceptor.start() {
             interceptor.onMove = { [weak self] in self?.session?.move($0) }
             interceptor.onCancel = { [weak self] in self?.cancel() }
-            interceptor.onCommit = { [weak self] in self?.commit() }
+            interceptor.onCommit = { [weak self] in self?.commitRequest() }
             self.interceptor = interceptor
         } else {
             log.error("could not install the window cycle event tap; falling back to panel keys")
@@ -223,11 +283,13 @@ public final class WindowSwitcherController {
     }
 
     private func startFallbackDismissor() {
+        // heldAtShow is true by construction: this runs at open, and a
+        // Carbon hotkey only fires with its modifiers held.
         let dismissor = HoldToCommitDismiss(
             triggerFlags: preferences.windowSwitchHotKey.modifierFlags,
             heldAtShow: true
         )
-        dismissor.onModifierRelease = { [weak self] in self?.commit() }
+        dismissor.onModifierRelease = { [weak self] in self?.commitRequest() }
         self.dismissor = dismissor
         dismissor.beginSession()
     }
@@ -265,12 +327,16 @@ public final class WindowSwitcherController {
 
     // MARK: - Captures
 
-    private func startCaptures(session: WindowCycleSession, screen: NSScreen) {
+    private func startCaptures(
+        session: WindowCycleSession,
+        screen: NSScreen,
+        bounds: [CGWindowID: CGRect]
+    ) {
         let displayScale = screen.backingScaleFactor
         let request = WindowPreviewCapture.Request(
             capturer: capturer,
             ids: session.entries.map(\.id),
-            bounds: capturer.windowBoundsByID(),
+            bounds: bounds,
             displayScale: displayScale,
             maxDimension: session.entries.isEmpty
                 ? 200 * displayScale
@@ -283,7 +349,10 @@ public final class WindowSwitcherController {
                     guard let cgImage = image, let session else {
                         return
                     }
-                    let size = NSSize(width: CGFloat(cgImage.width) / 2, height: CGFloat(cgImage.height) / 2)
+                    let size = NSSize(
+                        width: CGFloat(cgImage.width) / displayScale,
+                        height: CGFloat(cgImage.height) / displayScale
+                    )
                     session.setImage(NSImage(cgImage: cgImage, size: size), forWindow: id)
                 },
                 onInitialPass: {}
@@ -320,9 +389,16 @@ public final class WindowSwitcherController {
     // MARK: - Hotkeys
 
     private func registerHotKeys() {
+        // While the strip (or its load) owns the trigger, re-registration
+        // would make Carbon and the event tap both fire on the same repeat;
+        // every exit path re-registers after dismiss.
+        guard !isActive else {
+            return
+        }
         hotKeyCenter.unregister(.windowCycleForward)
         hotKeyCenter.unregister(.windowCycleBackward)
         guard preferences.windowSwitchEnabled else {
+            settingsModel.hotKeyErrorMessage = nil
             return
         }
         let spec = preferences.windowSwitchHotKey
@@ -339,6 +415,10 @@ public final class WindowSwitcherController {
             )
             settingsModel.hotKeyErrorMessage = nil
         } catch {
+            // Half a feature is worse than none: roll both roles back so a
+            // partial registration can't fire while the banner shows.
+            hotKeyCenter.unregister(.windowCycleForward)
+            hotKeyCenter.unregister(.windowCycleBackward)
             log.error("window switcher hotkey registration failed: \(error)")
             settingsModel.hotKeyErrorMessage = spec.registrationFailureMessage
         }

@@ -12,12 +12,15 @@ final class WindowCycleSessionTests: XCTestCase {
     private let idB = CGWindowID(2)
     private let idC = CGWindowID(3)
 
-    func testPreselectsSecondWindow() {
+    func testInitSelectsFirstWindow() {
+        // ⌘Tab semantics live in the controller: the session starts on the
+        // focused window (index 0) and the controller applies the initial
+        // move, so a forward tap lands on the previous window.
         let session = WindowCycleSession(
             windows: [window(idA, "A"), window(idB, "B"), window(idC, "C")],
             icons: [:]
         )
-        XCTAssertEqual(session.selectedEntry?.id, idB)
+        XCTAssertEqual(session.selectedEntry?.id, idA)
     }
 
     func testSingleWindowStaysOnZero() {
@@ -33,6 +36,9 @@ final class WindowCycleSessionTests: XCTestCase {
             windows: [window(idA, "A"), window(idB, "B"), window(idC, "C")],
             icons: [:]
         )
+        // The controller opens with move(.next): index 0 → 1.
+        session.move(.next)
+        XCTAssertEqual(session.selectedEntry?.id, idB)
         session.move(.next)
         XCTAssertEqual(session.selectedEntry?.id, idC)
         session.move(.next)

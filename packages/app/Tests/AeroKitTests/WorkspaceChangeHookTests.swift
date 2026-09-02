@@ -25,6 +25,20 @@ final class WorkspaceChangeHookTests: XCTestCase {
         XCTAssertEqual(WorkspaceChangeHook.classify(configText: text), .absent)
     }
 
+    func testTrailingCommentStillClassifies() {
+        let foreign = "exec-on-workspace-change = ['/bin/bash', '-c', 'x'] # sketchybar\n"
+        XCTAssertEqual(WorkspaceChangeHook.classify(configText: foreign), .needsMerge)
+        let wired = "exec-on-workspace-change = ['/opt/AeroKit', '--workspace-changed'] # note\n"
+        XCTAssertEqual(WorkspaceChangeHook.classify(configText: wired), .wired)
+    }
+
+    func testMultilineArrayIsNeedsMergeNotAbsent() {
+        // A multi-line array is an assignment this parser can't merge; the
+        // pane must not suggest a fresh paste line (duplicate TOML key).
+        let text = "exec-on-workspace-change = [\n  '/bin/bash', '-c', 'x'\n]\n"
+        XCTAssertEqual(WorkspaceChangeHook.classify(configText: text), .needsMerge)
+    }
+
     func testHookLineFormat() {
         XCTAssertEqual(
             WorkspaceChangeHook.hookLine(executablePath: "/Applications/AeroKit.app/Contents/MacOS/AeroKit"),

@@ -147,8 +147,9 @@ struct SwipeSettingsView: View {
             if let status = hookStatus, status.wiring != .wired || !status.wiredPathExists {
                 if status.wiring == .needsMerge, status.mergedHookLine == nil {
                     Text(
-                        "Your existing hook can't be merged automatically. Chain AeroKit by appending "
-                            + "'; <this app's path> --workspace-changed' inside its command string."
+                        "Can't merge automatically. If the hook is a shell command (['/bin/bash', '-c', '…']), "
+                            + "append '; <this app's path> --workspace-changed' inside its command string. "
+                            + "If it runs a binary directly, wrap that command in ['/bin/bash', '-c', '…'] first."
                     )
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -226,8 +227,6 @@ struct SwipeSettingsView: View {
         }
     }
 
-    /// The line to paste: a fresh hook line, or — when an existing
-    /// recognizable shell hook runs — that hook with AeroKit chained in.
     /// The line to paste: a fresh hook line, or — when an existing
     /// recognizable shell hook runs — that hook with AeroKit chained in.
     private var hookDisplayLine: String? {

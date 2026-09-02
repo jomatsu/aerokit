@@ -21,7 +21,11 @@ private func postAndExit(_ name: Notification.Name, userInfo: [String: String]? 
 private func workspaceChangeUserInfo() -> [String: String] {
     let environment = ProcessInfo.processInfo.environment
     var userInfo: [String: String] = [:]
-    if let workspace = environment["AEROSPACE_WORKSPACE"], !workspace.isEmpty {
+    // Both names appear across AeroSpace builds/versions; the running app
+    // re-reads focus itself, so this payload is informational.
+    let workspace = environment["AEROSPACE_WORKSPACE"]
+        ?? environment["AEROSPACE_FOCUSED_WORKSPACE"]
+    if let workspace, !workspace.isEmpty {
         userInfo["workspace"] = workspace
     }
     if let previous = environment["AEROSPACE_PREV_WORKSPACE"], !previous.isEmpty {

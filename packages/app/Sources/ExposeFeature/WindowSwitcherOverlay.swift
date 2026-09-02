@@ -5,8 +5,8 @@ import SwiftUI
 /// Hosts the cycling strip in a borderless, non-activating panel centered
 /// on the focused screen. Key routing has two paths: when Accessibility is
 /// granted, `WindowCycleInterceptor` sees the events globally and this
-/// panel is just a picture; without it, `keyHandler` (fed by the panel and
-/// a local monitor) drives the same rules while `HoldToCommitDismiss`
+/// panel is just a picture; without it, the controller routes this panel's
+/// `keyHandler` through the same pure rules while `HoldToCommitDismiss`
 /// supplies the release-to-commit.
 @MainActor
 final class WindowSwitcherOverlay {

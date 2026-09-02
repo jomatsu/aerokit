@@ -80,6 +80,8 @@ final class AppCoordinator {
         swipe.start()
 
         swipeMonitor.onSwipeEvent = { [weak self] event in
+            // A swipe takes the screen from the window switcher's strip.
+            self?.windowSwitcher.cancelIfActive()
             switch event.axis {
             case .horizontal:
                 self?.swipe.handle(event)
@@ -192,9 +194,9 @@ final class AppCoordinator {
         expose.toggleAppWindows()
     }
 
-    /// The external workspace change surfaced by the coordinator (exec hook
-    /// notification) invalidates the strip: its windows describe a
-    /// workspace that is no longer in front.
+    /// An external workspace change (the exec-on-workspace-change hook's
+    /// report): cancels the window switcher's now-stale strip and flashes
+    /// the swipe HUD for the switch that just landed.
     func showWorkspaceChangeHUD(workspace: String?, previous: String?) {
         log.notice("workspace changed outside AeroKit: \(previous ?? "?") → \(workspace ?? "?")")
         windowSwitcher.cancelIfActive()
@@ -202,6 +204,11 @@ final class AppCoordinator {
     }
 
     private func dispatch(_ role: HotKeyRole) {
+        // The window switcher's strip defers to whichever overlay owns the
+        // screen first — they fight over the same key events.
+        if role != .windowCycleForward, role != .windowCycleBackward {
+            windowSwitcher.cancelIfActive()
+        }
         switch role {
         case .cycleForward, .cycleBackward, .escape:
             switcher.handle(role)

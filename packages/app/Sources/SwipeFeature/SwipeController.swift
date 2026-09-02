@@ -112,6 +112,9 @@ public final class SwipeController {
             .sink { [weak self] show in
                 if !show {
                     self?.hud.hide()
+                    // Kill any flash in flight: its ring load would settle
+                    // onto a panel the user just turned off.
+                    self?.flashEpoch += 1
                 }
             }
             .store(in: &cancellables)
@@ -304,6 +307,10 @@ public final class SwipeController {
             }
             if switched, let self {
                 onWorkspaceSwitched?()
+            } else if let self {
+                // A failed switch never fires the hook, so its echo
+                // suppression must not either.
+                lastOwnCommitAt = nil
             }
             self?.verifyFocus(after: plan.target, epoch: epoch)
         }
@@ -341,7 +348,7 @@ public final class SwipeController {
                 let previews = ring.workspaces.reduce(into: [String: NSImage]()) { $0[$1] = preview($1) }
                 return (ring: ring, previews: previews)
             }
-            guard let self, let loaded, epoch == flashEpoch, shouldShowFlash() else {
+            guard let self, let loaded, epoch == flashEpoch, shouldShowFlash(), preferences.showHUD else {
                 return
             }
             currentPreviews = loaded.previews
