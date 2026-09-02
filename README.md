@@ -31,6 +31,13 @@ that make the destination recognizable before switching.
 See the focused workspace as a spatial overview, or find every window of the
 focused app across workspaces, then jump directly to the one you need.
 
+### Window Switcher (experimental)
+
+Hold a hotkey (default ⌥Tab, configurable) to cycle the focused workspace's
+windows in a strip — most-recently-used first; release to commit. Ships
+disabled: AeroSpace's default config already binds alt-tab, so enable it in
+Settings › Exposé and pick a hotkey.
+
 ### Trackpad Swipe
 
 ![Trackpad Swipe](docs/images/aerokit-swipe.gif)

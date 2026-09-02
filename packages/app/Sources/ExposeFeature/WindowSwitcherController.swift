@@ -72,6 +72,12 @@ public final class WindowSwitcherController {
         registerHotKeys()
     }
 
+    /// Settings section embedded in the unified settings window's Exposé
+    /// pane; one preference store backs both features.
+    public func makeSettingsSection() -> some View {
+        WindowSwitcherSettingsView(model: settingsModel, preferences: preferences)
+    }
+
     public func handle(_ role: HotKeyRole) {
         guard preferences.windowSwitchEnabled else {
             return

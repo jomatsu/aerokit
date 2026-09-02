@@ -2,6 +2,7 @@ import AeroKitCore
 import AppKit
 import ExposeFeature
 import Foundation
+import SwiftUI
 import SwipeFeature
 import SwitcherFeature
 
@@ -140,7 +141,10 @@ final class AppCoordinator {
             settingsWindow = SettingsWindowController(
                 client: client,
                 switcherPane: switcher.makeSettingsPane(),
-                exposePane: expose.makeSettingsPane(),
+                exposePane: VStack(alignment: .leading, spacing: 20) {
+                    expose.makeSettingsPane()
+                    windowSwitcher.makeSettingsSection()
+                },
                 swipePane: swipe.makeSettingsPane()
             ) { [weak self] in
                 self?.switcher.refreshSettingsStatus()
