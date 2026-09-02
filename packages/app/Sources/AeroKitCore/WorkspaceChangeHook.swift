@@ -68,14 +68,35 @@ public enum WorkspaceChangeHook {
             return .absent
         }
         if let line = hookLineText(in: configText) {
-            return line.contains(invocation) ? .wired : .needsMerge
+            // Judge only the argv array — a trailing comment mentioning the
+            // invocation must not fake "wired".
+            let arrayStart = line.firstIndex(of: "[") ?? line.startIndex
+            let array = line[arrayStart...]
+            return array.contains(invocation) ? .wired : .needsMerge
         }
-        return hasAssignmentLine(in: configText) ? .needsMerge : .absent
+        if hasAssignmentLine(in: configText) {
+            // Multi-line array: slice from the key to the first `]` across
+            // lines so a wired config isn't misread as foreign.
+            guard let keyRange = configText.range(of: "(?m)^\\s*" + key + "\\s*=", options: .regularExpression) else {
+                return .needsMerge
+            }
+            let afterKey = configText[keyRange.upperBound...]
+            guard let close = afterKey.firstIndex(of: "]") else {
+                return .needsMerge
+            }
+            return afterKey[..<close].contains(invocation) ? .wired : .needsMerge
+        }
+        return .absent
     }
 
-    /// The hook line a fresh config needs.
+    /// The hook line a fresh config needs. Paths containing a single quote
+    /// can't live in a TOML literal string, so those switch to basic-string
+    /// quoting.
     public static func hookLine(executablePath: String) -> String {
-        "\(key) = ['\(executablePath)', '\(invocation)']"
+        if executablePath.contains("'") {
+            return "\(key) = [\"\(executablePath)\", \"\(invocation)\"]"
+        }
+        return "\(key) = ['\(executablePath)', '\(invocation)']"
     }
 
     /// Reads the config and classifies it; also composes the merged

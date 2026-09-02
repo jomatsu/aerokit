@@ -20,6 +20,11 @@ public final class ScopedEventTap {
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    /// The +1 retention backing the tap callback's unretained pointer; the
+    /// callback can fire any time between `start` and `stop`, so the object
+    /// must stay alive even if its owner drops it without stopping first
+    /// (a leak beats a use-after-free in a C callback).
+    private var retainedSelf: UnsafeMutableRawPointer?
 
     /// - Parameter consume: returns true when the event was swallowed.
     public init(eventsOfInterest: CGEventMask, consume: @escaping @MainActor (CGEventType, CGEvent) -> Bool) {
@@ -32,6 +37,11 @@ public final class ScopedEventTap {
         guard tap == nil else {
             return true
         }
+
+        // The +1 in this opaque pointer is what keeps the callback's
+        // refcon valid; it is taken back in stop().
+        let userInfo = Unmanaged.passRetained(self).toOpaque()
+        retainedSelf = userInfo
 
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -51,8 +61,10 @@ public final class ScopedEventTap {
                 }
                 return consumed ? nil : Unmanaged.passUnretained(event)
             },
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
+            userInfo: userInfo
         ) else {
+            Unmanaged<ScopedEventTap>.fromOpaque(userInfo).takeRetainedValue()
+            retainedSelf = nil
             return false
         }
 
@@ -76,6 +88,12 @@ public final class ScopedEventTap {
         }
         tap = nil
         runLoopSource = nil
+        // Release the callback's +1 now that the port is invalidated; nil
+        // the local first so a dealloc here can't write back through self.
+        if let retainedSelf {
+            self.retainedSelf = nil
+            Unmanaged<ScopedEventTap>.fromOpaque(retainedSelf).takeRetainedValue()
+        }
     }
 
     /// Keyboard taps get disabled by the system if a callback stalls;

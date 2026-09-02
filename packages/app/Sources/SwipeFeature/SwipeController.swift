@@ -307,9 +307,9 @@ public final class SwipeController {
             }
             if switched, let self {
                 onWorkspaceSwitched?()
-            } else if let self {
-                // A failed switch never fires the hook, so its echo
-                // suppression must not either.
+            } else if let self, epoch == commitEpoch {
+                // Only clear our own stamp: a newer gesture's suppression
+                // window must survive an older failed attempt.
                 lastOwnCommitAt = nil
             }
             self?.verifyFocus(after: plan.target, epoch: epoch)

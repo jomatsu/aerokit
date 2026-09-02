@@ -28,6 +28,10 @@ public final class WindowSwitcherController {
     private var interceptor: WindowCycleInterceptor?
     private var dismissor: HoldToCommitDismiss?
     private var session: WindowCycleSession?
+    /// Net cycle moves tapped while the presentation was still loading;
+    /// applied to the session the moment it lands (grok: a fast double-tap
+    /// across a slow CLI must skip two windows, not one).
+    private var pendingMoves = 0
     private var presentTask: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
     /// Bumped by every open/dismiss so a presentation superseded while
@@ -121,12 +125,17 @@ public final class WindowSwitcherController {
         // them reach the panel.
         unregisterHotKeys()
 
-        // Interactions start before the load, not after it: the tap (or
-        // fallback) must own the trigger key from now on, or auto-repeats
-        // during the CLI round trip would leak to the frontmost app and to
-        // AeroSpace's own alt-tab binding.
-        startInteractions()
         commitOnLoad = false
+        pendingMoves = 0
+        // The tap (or fallback) must own the trigger key from now on, or
+        // auto-repeats during the CLI round trip would leak to the frontmost
+        // app and to AeroSpace's own alt-tab binding. And if the modifiers
+        // were already released in the dispatch hop before the tap existed,
+        // no flagsChanged will ever arrive — flag the commit up front.
+        if !HoldToCommitDismiss.modifiersPhysicallyHeld(preferences.windowSwitchHotKey.modifierFlags) {
+            commitOnLoad = true
+        }
+        startInteractions()
 
         presentTask?.cancel()
         presentEpoch += 1
@@ -171,12 +180,14 @@ public final class WindowSwitcherController {
         presentTask = nil
 
         guard let context else {
-            log.error("window switcher: no windows in the focused workspace")
-            registerHotKeys()
+            // The presentation is dead — the interactions started in open()
+            // must go with it, or the tap keeps swallowing every keystroke
+            // system-wide with no keyboard recovery.
+            dismiss()
             return
         }
         guard let screen = screen(for: context.snapshot.screenNumber) else {
-            registerHotKeys()
+            dismiss()
             return
         }
 
@@ -188,6 +199,13 @@ public final class WindowSwitcherController {
         let icons = icons(for: ordered)
         let session = WindowCycleSession(windows: ordered, icons: icons)
         session.move(initial)
+        // Cycle taps that arrived during the load apply on top.
+        if pendingMoves > 0 {
+            session.move(.next)
+        } else if pendingMoves < 0 {
+            session.move(.previous)
+        }
+        pendingMoves = 0
         self.session = session
 
         // The modifiers were released while the CLI round trip ran: commit
@@ -205,14 +223,27 @@ public final class WindowSwitcherController {
         startCaptures(session: session, screen: screen, bounds: context.bounds)
     }
 
-    /// The release signal, from either the tap or the fallback dismissor:
-    /// commit now when the strip is up; if the release happened during the
-    /// load, flag the presentation to commit as soon as it lands.
     private func commitRequest() {
         if overlay.isVisible {
             commit()
         } else if presentTask != nil {
             commitOnLoad = true
+        }
+    }
+
+    /// A cycle tap during the load lands on nothing yet — count it and
+    /// apply it when the session arrives, so a fast double-tap across a
+    /// slow CLI skips two windows, not one.
+    private func move(_ move: SelectionMove) {
+        if let session {
+            session.move(move)
+        } else if isActive {
+            switch move {
+            case .next, .right, .down:
+                pendingMoves += 1
+            case .previous, .left, .up:
+                pendingMoves -= 1
+            }
         }
     }
 
@@ -260,19 +291,28 @@ public final class WindowSwitcherController {
         dismissor = nil
         overlay.hide()
         session = nil
+        pendingMoves = 0
         registerHotKeys()
     }
 
     // MARK: - Interaction
 
     private func startInteractions() {
+        // Never overwrite a live tap: its callback holds an unretained
+        // pointer to it, and dropping the object without stopping the port
+        // would leave the callback dangling.
+        interceptor?.stop()
+        interceptor = nil
+        dismissor?.endSession()
+        dismissor = nil
+
         guard AccessibilityPermission.isGranted else {
             startFallbackDismissor()
             return
         }
         let interceptor = WindowCycleInterceptor(hotKey: preferences.windowSwitchHotKey)
         if interceptor.start() {
-            interceptor.onMove = { [weak self] in self?.session?.move($0) }
+            interceptor.onMove = { [weak self] in self?.move($0) }
             interceptor.onCancel = { [weak self] in self?.cancel() }
             interceptor.onCommit = { [weak self] in self?.commitRequest() }
             self.interceptor = interceptor
@@ -300,7 +340,7 @@ public final class WindowSwitcherController {
         dismissor?.noteKeyEvent(event)
 
         let kind: CycleKeyInput.Kind = switch event.keyCode {
-        case preferences.windowSwitchHotKey.keyCode, KeyCode.tab:
+        case preferences.windowSwitchHotKey.keyCode:
             .hotKey
         case KeyCode.leftArrow:
             .leftArrow
@@ -314,9 +354,9 @@ public final class WindowSwitcherController {
         let shifted = event.modifierFlags.contains(.shift)
         switch CycleKeyRules.action(for: .key(kind, shifted: shifted)) {
         case .advance:
-            session?.move(.next)
+            move(.next)
         case .retreat:
-            session?.move(.previous)
+            move(.previous)
         case .cancel:
             cancel()
         case .commit, .swallow, .pass:
@@ -431,7 +471,15 @@ public final class WindowSwitcherController {
 
     private func observePreferences() {
         preferences.$windowSwitchEnabled.dropFirst()
-            .sink { [weak self] _ in self?.registerHotKeys() }
+            .sink { [weak self] enabled in
+                guard let self else { return }
+                // Disabling mid-session must tear the strip/load down now,
+                // not wait for a commit that may never come.
+                if !enabled {
+                    dismiss()
+                }
+                registerHotKeys()
+            }
             .store(in: &cancellables)
         preferences.$windowSwitchHotKey.dropFirst()
             .sink { [weak self] _ in self?.registerHotKeys() }

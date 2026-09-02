@@ -330,9 +330,11 @@ struct SwipeSettingsView: View {
     private var showHUDRow: some View {
         SettingsRow(
             title: "Show workspace strip",
-            subtitle: "Briefly display the workspace list after every switch"
+            subtitle: "Briefly display the workspace list after every switch — also gates keyboard-switch flashes"
         ) {
-            SettingsToggle(isOn: $preferences.showHUD, isEnabled: preferences.isEnabled)
+            // Not gated on `isEnabled`: keyboard-switch flashes only read
+            // this preference, so a swipe-off user can still opt in here.
+            SettingsToggle(isOn: $preferences.showHUD)
         }
     }
 

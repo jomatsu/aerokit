@@ -200,6 +200,9 @@ final class AppCoordinator {
     func showWorkspaceChangeHUD(workspace: String?, previous: String?) {
         log.notice("workspace changed outside AeroKit: \(previous ?? "?") → \(workspace ?? "?")")
         windowSwitcher.cancelIfActive()
+        // The hook is also the freshest signal that keyboard-driven switches
+        // landed — refresh thumbnails the same way swipe commits do.
+        switcher.scheduleSnapshotRefreshForWorkspaceChange()
         swipe.showWorkspaceChangeHUD()
     }
 
