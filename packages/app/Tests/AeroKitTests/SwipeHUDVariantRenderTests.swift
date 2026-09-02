@@ -100,7 +100,7 @@ final class SwipeHUDVariantRenderTests: XCTestCase {
     ) -> some View {
         ZStack {
             if let preview = workspace.preview {
-                Image(nsImage: preview).resizable().aspectRatio(contentMode: .fill)
+                Image(nsImage: preview).resizable().scaledToFill()
             } else {
                 Rectangle().fill(.white.opacity(0.07))
                 Image(systemName: "macwindow")

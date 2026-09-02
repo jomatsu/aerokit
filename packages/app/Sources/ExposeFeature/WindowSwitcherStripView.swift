@@ -43,7 +43,7 @@ struct WindowSwitcherStripView: View {
             if let image = entry.image {
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .scaledToFill()
             } else {
                 Rectangle()
                     .fill(.white.opacity(0.07))

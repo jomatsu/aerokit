@@ -149,22 +149,20 @@ struct SwipeSettingsView: View {
     /// the user into deleting their existing hook — manual chaining
     /// instructions instead. Wired-but-stale gets the fresh line to replace
     /// the dead path with.
-    private var wiringGuidance: some View {
-        Group {
-            if let status = hookStatus, status.wiring != .wired || !status.wiredPathExists {
-                if status.wiring == .needsMerge, status.mergedHookLine == nil {
-                    Text(
-                        "Can't compose a merged line for this hook. Append "
-                            + "'; <this app's path> --workspace-changed' to the end of its command, then reload."
-                    )
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    VStack(alignment: .leading, spacing: 10) {
-                        setupSteps
-                        hookSnippet
-                    }
+    @ViewBuilder private var wiringGuidance: some View {
+        if let status = hookStatus, status.wiring != .wired || !status.wiredPathExists {
+            if status.wiring == .needsMerge, status.mergedHookLine == nil {
+                Text(
+                    "Can't compose a merged line for this hook. Append "
+                        + "'; <this app's path> --workspace-changed' to the end of its command, then reload."
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    setupSteps
+                    hookSnippet
                 }
             }
         }

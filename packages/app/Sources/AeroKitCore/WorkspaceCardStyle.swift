@@ -65,7 +65,7 @@ public struct WorkspaceCardThumbnail: View {
             if let image {
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .scaledToFill()
             } else {
                 Rectangle()
                     .fill(.white.opacity(0.07))

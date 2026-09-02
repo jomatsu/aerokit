@@ -89,8 +89,12 @@ public enum WorkspaceComposer {
         let cellHeight = (canvasSize.height - gap * CGFloat(rows + 1)) / CGFloat(rows)
         var innerWidth = cellWidth - gap
         var innerHeight = cellHeight - gap
-        if innerWidth < 80 { innerWidth = cellWidth }
-        if innerHeight < 60 { innerHeight = cellHeight }
+        if innerWidth < 80 {
+            innerWidth = cellWidth
+        }
+        if innerHeight < 60 {
+            innerHeight = cellHeight
+        }
 
         let gridLeft = (canvasSize.width - CGFloat(cols) * cellWidth) / 2
         let gridTop = (canvasSize.height - CGFloat(rows) * cellHeight) / 2

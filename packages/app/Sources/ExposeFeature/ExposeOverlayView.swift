@@ -506,7 +506,11 @@ struct ExposeOverlayView: View {
             onActivate: { onActivate(index) },
             // The cursor sweeping the grid mid-drag must not fight the
             // selection ring.
-            onHover: { if drag == nil { onHover(index) } },
+            onHover: {
+                if drag == nil {
+                    onHover(index)
+                }
+            },
             onDragChanged: { value in dragChanged(value, id: tile.id) },
             onDragEnded: { _ in dragEnded() }
         )
