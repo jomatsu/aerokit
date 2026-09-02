@@ -54,6 +54,27 @@ final class WorkspaceChangeHookTests: XCTestCase {
         XCTAssertEqual(WorkspaceChangeHook.classify(configText: text), .wired)
     }
 
+    func testArrayFollowedByCommentLinesStillMerges() {
+        // The real-world layout that broke the first attempt: the array's
+        // own line, then comment lines using double quotes. The \s in the
+        // trailing-whitespace slot must never cross newlines.
+        let config = "exec-on-workspace-change = ['/bin/bash', '-lc', "
+            + "'~/dotfiles/scripts/aerospace-workspace-snapshot-request.sh workspace-change']\n"
+            + "\n# You can effectively turn off macOS \"Hide application\" (cmd-h) feature\n"
+            + "automatically-unhide-macos-hidden-apps = false\n"
+        let merged = WorkspaceChangeHook.mergedHookLine(
+            configText: config,
+            executablePath: "/Users/jomatsuda/Applications/AeroKit Dev.app/Contents/MacOS/AeroKit"
+        )
+        XCTAssertEqual(
+            merged,
+            "exec-on-workspace-change = ['/bin/bash', '-lc', "
+                + "'~/dotfiles/scripts/aerospace-workspace-snapshot-request.sh workspace-change; "
+                + "\"/Users/jomatsuda/Applications/AeroKit Dev.app/Contents/MacOS/AeroKit\" "
+                + "--workspace-changed']"
+        )
+    }
+
     func testHookLineFormat() {
         XCTAssertEqual(
             WorkspaceChangeHook.hookLine(executablePath: "/Applications/AeroKit.app/Contents/MacOS/AeroKit"),

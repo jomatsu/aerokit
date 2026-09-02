@@ -53,7 +53,9 @@ public enum WorkspaceChangeHook {
     private static func hookLineText(in configText: String) -> String? {
         // [^\]\n] keeps the match on the key's line: a multi-line array is
         // an assignment the merger can't reconstruct.
-        let pattern = "(?m)^\\s*" + key + "\\s*=\\s*\\[[^\\]\\n]*\\]\\s*(#.*)?$"
+        // [ \t] (not \s) after the array: \s would let the match cross
+        // newlines and swallow the comment lines that follow it.
+        let pattern = "(?m)^\\s*" + key + "\\s*=\\s*\\[[^\\]\\n]*\\][ \\t]*(?:#.*)?$"
         guard let range = configText.range(of: pattern, options: .regularExpression) else {
             return nil
         }
