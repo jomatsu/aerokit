@@ -13,6 +13,7 @@ struct SwipeSettingsView: View {
     let reloadAerospaceConfig: @Sendable () throws -> Void
 
     @State private var hookStatus: WorkspaceChangeHook.Status?
+    @State private var copiedNotice: String?
     @State private var reloadMessage: String?
     @State private var reloadFailed = false
 
@@ -115,6 +116,12 @@ struct SwipeSettingsView: View {
                 introText
                 hookStatusRow
                 wiringGuidance
+                copyButtons
+                if let notice = copiedNotice {
+                    Text(notice)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 if !preferences.showHUD {
                     hudOffNote
                 }
@@ -147,9 +154,8 @@ struct SwipeSettingsView: View {
             if let status = hookStatus, status.wiring != .wired || !status.wiredPathExists {
                 if status.wiring == .needsMerge, status.mergedHookLine == nil {
                     Text(
-                        "Can't merge automatically. If the hook is a shell command (['/bin/bash', '-c', '…']), "
-                            + "append '; <this app's path> --workspace-changed' inside its command string. "
-                            + "If it runs a binary directly, wrap that command in ['/bin/bash', '-c', '…'] first."
+                        "Can't compose a merged line for this hook. Append "
+                            + "'; <this app's path> --workspace-changed' to the end of its command, then reload."
                     )
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -229,14 +235,73 @@ struct SwipeSettingsView: View {
 
     /// The line to paste: a fresh hook line, or — when an existing
     /// recognizable shell hook runs — that hook with AeroKit chained in.
+    /// The line to copy: a fresh hook line, the composed merge for an
+    /// existing shell hook, or nil when the layout needs a human.
     private var hookDisplayLine: String? {
         guard let status = hookStatus else { return nil }
-        if status.wiring == .needsMerge, let merged = status.mergedHookLine {
-            return merged
+        if status.wiring == .needsMerge {
+            return status.mergedHookLine
         }
         return WorkspaceChangeFlash.tomlSnippet(
             executablePath: WorkspaceChangeHook.currentExecutablePath()
         )
+    }
+
+    /// A ready-to-paste instruction for an AI agent to perform the wiring.
+    /// nil when nothing needs changing.
+    private var aiPrompt: String? {
+        guard let status = hookStatus, status.wiring != .wired else { return nil }
+        let configPath = status.configPath ?? "~/.aerospace.toml"
+        let exePath = WorkspaceChangeHook.currentExecutablePath()
+        let footer = "Change nothing else in the file, then run `aerospace reload-config`."
+        switch status.wiring {
+        case .absent:
+            let line = WorkspaceChangeFlash.tomlSnippet(executablePath: exePath)
+            return "Edit \(configPath) (the AeroSpace config) and add this line:\n\n\(line)\n\n" + footer
+        case .needsMerge:
+            if let merged = status.mergedHookLine {
+                return "Edit \(configPath) (the AeroSpace config): replace the existing "
+                    + "exec-on-workspace-change line with exactly this one — it chains AeroKit "
+                    + "after the current command:\n\n\(merged)\n\n" + footer
+            }
+            var prompt = "Edit \(configPath) (the AeroSpace config): find the "
+                + "exec-on-workspace-change assignment"
+            if let existing = status.existingHookLine {
+                prompt += ", which currently reads:\n\n\(existing)"
+            }
+            prompt += "\n\nAppend `; \(exePath) --workspace-changed` inside its command string "
+                + "(double-quote the path if it contains spaces). " + footer
+            return prompt
+        case .wired:
+            return nil
+        }
+    }
+
+    private func copyToPasteboard(_ text: String?, notice: String) {
+        guard let text else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copiedNotice = notice
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            copiedNotice = nil
+        }
+    }
+
+    /// The two copy buttons: the raw line for a human, and a natural-
+    /// language prompt an AI agent can execute to perform the same edit.
+    private var copyButtons: some View {
+        HStack(spacing: 8) {
+            Button("Copy config line") {
+                copyToPasteboard(hookDisplayLine, notice: "Config line copied")
+            }
+            .disabled(hookDisplayLine == nil)
+            Button("Copy AI prompt") {
+                copyToPasteboard(aiPrompt, notice: "AI prompt copied")
+            }
+            .disabled(aiPrompt == nil)
+        }
+        .controlSize(.small)
     }
 
     private var hookSnippet: some View {
@@ -252,16 +317,6 @@ struct SwipeSettingsView: View {
         .background {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(.quaternary.opacity(0.7))
-        }
-        .overlay(alignment: .topTrailing) {
-            Button("Copy") {
-                if let line = hookDisplayLine {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(line, forType: .string)
-                }
-            }
-            .controlSize(.small)
-            .padding(4)
         }
     }
 

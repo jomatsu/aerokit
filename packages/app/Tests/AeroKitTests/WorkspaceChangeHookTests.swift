@@ -2,6 +2,9 @@ import XCTest
 @testable import AeroKitCore
 
 final class WorkspaceChangeHookTests: XCTestCase {
+    /// A double quote.
+    private let dq = "\""
+
     func testClassifyWithoutConfigIsAbsent() {
         XCTAssertEqual(WorkspaceChangeHook.classify(configText: nil), .absent)
     }
@@ -90,11 +93,40 @@ final class WorkspaceChangeHookTests: XCTestCase {
         XCTAssertNil(WorkspaceChangeHook.mergedHookLine(configText: config, executablePath: "/opt/AeroKit"))
     }
 
-    func testUnsafeExecutablePathBailsMerge() {
+    func testSpacedExecutablePathMergesShellQuoted() {
+        let config = "exec-on-workspace-change = ['/bin/bash', '-c', 'echo hi']\n"
+        let merged = WorkspaceChangeHook.mergedHookLine(
+            configText: config,
+            executablePath: "/opt/Apps AeroKit/AeroKit"
+        )
+        XCTAssertEqual(
+            merged,
+            "exec-on-workspace-change = ['/bin/bash', '-c', "
+                + "'echo hi; \"/opt/Apps AeroKit/AeroKit\" --workspace-changed']"
+        )
+    }
+
+    func testPathWithDoubleQuoteBailsMerge() {
         let config = "exec-on-workspace-change = ['/bin/bash', '-c', 'echo hi']\n"
         XCTAssertNil(
-            WorkspaceChangeHook.mergedHookLine(configText: config, executablePath: "/opt/Apps AeroKit/AeroKit")
+            WorkspaceChangeHook.mergedHookLine(configText: config, executablePath: "/opt/A\"eroKit")
         )
+    }
+
+    func testMergesIntoRealWorldDotfilesHook() {
+        let config = "exec-on-workspace-change = ['/bin/bash', '-lc', "
+            + "'~/dotfiles/scripts/aerospace-workspace-snapshot-request.sh workspace-change']\n"
+        let merged = WorkspaceChangeHook.mergedHookLine(
+            configText: config,
+            executablePath: "/Users/jomatsuda/Applications/AeroKit Dev.app/Contents/MacOS/AeroKit"
+        )
+        let devPath = "/Users/jomatsuda/Applications/AeroKit Dev.app/Contents/MacOS/AeroKit"
+        let quotedDevPath = dq + devPath + dq
+        let expected =
+            "exec-on-workspace-change = ['/bin/bash', '-lc', "
+                + "'~/dotfiles/scripts/aerospace-workspace-snapshot-request.sh workspace-change; "
+                + quotedDevPath + " --workspace-changed']"
+        XCTAssertEqual(merged, expected)
     }
 
     func testLongFlagBailsMerge() {

@@ -25,6 +25,9 @@ public enum WorkspaceChangeHook {
         /// The existing hook rewritten to chain AeroKit; nil when the hook
         /// is absent or not a recognized `shell -c` command.
         public var mergedHookLine: String?
+        /// The raw existing assignment line (when one exists) — included
+        /// verbatim in the manual-merge AI prompt.
+        public var existingHookLine: String?
         /// For a fresh two-element hook line, the AeroKit path it names —
         /// used to warn when the config still points at a moved or deleted
         /// binary. nil for merged inline calls, where the path is embedded
@@ -124,12 +127,13 @@ public enum WorkspaceChangeHook {
         let configPath = configFilePath()
         let text = configPath.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }
         let wiring = classify(configText: text)
+        let line = text.flatMap { hookLineText(in: $0) }
 
         // "Configured" on paper but a hook that spawns nothing: a fresh
         // two-element line naming a binary that has since moved or been
         // deleted (e.g. a Homebrew path after a reinstall).
         var wiredPath: String?
-        if wiring == .wired, let line = text.flatMap({ hookLineText(in: $0) }) {
+        if wiring == .wired, let line {
             let elements = quotedElements(in: line)
             if elements.count == 2 {
                 wiredPath = elements[0].content
@@ -141,6 +145,7 @@ public enum WorkspaceChangeHook {
             wiring: wiring,
             configPath: configPath,
             mergedHookLine: text.flatMap { mergedHookLine(configText: $0, executablePath: executablePath) },
+            existingHookLine: wiring == .needsMerge ? line : nil,
             wiredPath: wiredPath,
             wiredPathExists: wiredPathExists
         )
@@ -156,11 +161,14 @@ public enum WorkspaceChangeHook {
     /// fully understand.
     public static func mergedHookLine(configText: String, executablePath: String) -> String? {
         // The chain lands inside a shell command string, where the path is
-        // no longer a bare argv element — spaces or shell metacharacters
-        // would break or hijack it.
-        guard isShellSafePath(executablePath),
-              let line = hookLineText(in: configText)
-        else {
+        // no longer a bare argv element. A path the shell can carry bare
+        // (charset-checked) is appended as-is; anything else — e.g. the
+        // space in "AeroKit Dev.app" — is wrapped in shell double quotes,
+        // which a TOML literal-string element passes through untouched.
+        // Paths that would survive neither form (quotes, backslashes,
+        // shell expansions) bail to manual instructions.
+        let shellSafe = isShellSafePath(executablePath)
+        guard let line = hookLineText(in: configText) else {
             return nil
         }
         let elements = quotedElements(in: line)
@@ -193,9 +201,25 @@ public enum WorkspaceChangeHook {
             return nil
         }
 
-        let chain = "; \(executablePath) \(invocation)"
-        // A quote (or, in a basic string, a backslash sequence) inside the
-        // merged command would end or corrupt the TOML string early.
+        // Shell-level quoting for a path the bare charset check rejects:
+        // double quotes carry spaces safely, but only when the path hides
+        // no shell expansions and the TOML element can represent them.
+        let chain: String
+        if shellSafe {
+            chain = "; \(executablePath) \(invocation)"
+        } else if command.quote == "'",
+                  !executablePath.contains("\""),
+                  !executablePath.contains("\\"),
+                  !executablePath.contains("$"),
+                  !executablePath.contains("`")
+        {
+            chain = "; \"\(executablePath)\" \(invocation)"
+        } else {
+            return nil
+        }
+
+        // A stray quote (or, in a basic string, a backslash sequence) would
+        // end or corrupt the TOML string early.
         switch command.quote {
         case "'" where chain.contains("'"):
             return nil
