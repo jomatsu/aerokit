@@ -343,19 +343,26 @@ public final class ExposeController {
     /// The drop bar's workspaces and their snapshot previews (workspaces
     /// the switcher has not snapshotted yet simply get a placeholder).
     /// Empty (logged) on CLI failure — the overlay shows no drop bar.
+    /// `@unchecked` for the AppKit images: built inside one nonisolated
+    /// call, consumed once on the main actor, never mutated.
+    private struct DropBarContent: @unchecked Sendable {
+        var targets: [WorkspaceTarget]
+        var previews: [String: NSImage]
+    }
+
     private nonisolated static func loadDropBarContent(
         preview: @Sendable (String) -> NSImage?,
         _ list: () throws -> [(name: String, isFocused: Bool)]
-    ) -> (targets: [WorkspaceTarget], previews: [String: NSImage]) {
+    ) -> DropBarContent {
         do {
             let targets = try list().map { WorkspaceTarget(name: $0.name, isFocused: $0.isFocused) }
             let previews = targets.reduce(into: [String: NSImage]()) { previews, target in
                 previews[target.name] = preview(target.name)
             }
-            return (targets, previews)
+            return DropBarContent(targets: targets, previews: previews)
         } catch {
             log.error("listing workspaces failed: \(error)")
-            return ([], [:])
+            return DropBarContent(targets: [], previews: [:])
         }
     }
 
