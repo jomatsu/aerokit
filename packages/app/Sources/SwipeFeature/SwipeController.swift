@@ -34,6 +34,19 @@ public final class SwipeController {
         var current: String
     }
 
+    /// Sendable carriers for values loaded off the main actor: the AppKit
+    /// images are handed to the main actor exactly once and never mutated
+    /// afterwards. Required because NSImage itself is not Sendable, and the
+    /// macOS 26 SDK checks every BlockingWork boundary.
+    private struct LoadedRing: @unchecked Sendable {
+        var ring: Ring?
+        var previews: [String: NSImage]
+    }
+
+    private struct LoadedIcons: @unchecked Sendable {
+        var icons: [String: [NSImage]]
+    }
+
     /// Resolves while the fingers are still moving so the HUD can appear
     /// mid-gesture; the commit awaits it.
     private var ringTask: Task<Ring?, Never>?
@@ -188,9 +201,9 @@ public final class SwipeController {
             // The previous gesture's switch must land before this ring is
             // read, or AeroSpace still reports the old focused workspace.
             await previousCommit?.value
-            let loaded = await BlockingWork.run { () -> (ring: Ring, previews: [String: NSImage])? in
+            let loaded = await BlockingWork.run { () -> LoadedRing in
                 guard let ring = Self.loadRing(client: client, skipEmpty: skipEmpty, order: order) else {
-                    return nil
+                    return LoadedRing(ring: nil, previews: [:])
                 }
                 // The store caches decoded thumbnails, so this is disk-bound
                 // once per snapshot refresh at most — but that cold decode
@@ -199,23 +212,23 @@ public final class SwipeController {
                 let previews = showHUD
                     ? ring.workspaces.reduce(into: [String: NSImage]()) { $0[$1] = preview($1) }
                     : [:]
-                return (ring: ring, previews: previews)
+                return LoadedRing(ring: ring, previews: previews)
             }
-            guard let loaded, let self, showHUD else {
-                return loaded?.ring
+            guard let ring = loaded.ring, let self, showHUD else {
+                return loaded.ring
             }
             currentPreviews = loaded.previews
             // Bring the HUD up mid-gesture as soon as the ring is known.
             if gestureActive {
                 hud.beginInteractive(
-                    workspaces: loaded.ring.workspaces,
-                    current: loaded.ring.current,
+                    workspaces: ring.workspaces,
+                    current: ring.current,
                     previews: currentPreviews,
                     wrapsAround: preferences.wrapAround
                 )
                 hud.setOffset(latestOffset)
             }
-            return loaded.ring
+            return ring
         }
 
         // App icons load alongside the ring, off the main thread (cache
@@ -228,9 +241,10 @@ public final class SwipeController {
         }
         let resolver = iconResolver
         iconTask = Task { [weak self] in
-            let icons = await BlockingWork.run { () -> [String: [NSImage]] in
-                Self.loadIcons(client: client, resolver: resolver)
+            let loaded = await BlockingWork.run { () -> LoadedIcons in
+                LoadedIcons(icons: Self.loadIcons(client: client, resolver: resolver))
             }
+            let icons = loaded.icons
             guard let self, !Task.isCancelled else {
                 return
             }
@@ -341,20 +355,20 @@ public final class SwipeController {
         let preview = workspacePreview
 
         Task { [weak self] in
-            let loaded = await BlockingWork.run { () -> (ring: Ring, previews: [String: NSImage])? in
+            let loaded = await BlockingWork.run { () -> LoadedRing in
                 guard let ring = Self.loadRing(client: client, skipEmpty: skipEmpty, order: order) else {
-                    return nil
+                    return LoadedRing(ring: nil, previews: [:])
                 }
                 let previews = ring.workspaces.reduce(into: [String: NSImage]()) { $0[$1] = preview($1) }
-                return (ring: ring, previews: previews)
+                return LoadedRing(ring: ring, previews: previews)
             }
-            guard let self, let loaded, epoch == flashEpoch, shouldShowFlash(), preferences.showHUD else {
+            guard let self, let ring = loaded.ring, epoch == flashEpoch, shouldShowFlash(), preferences.showHUD else {
                 return
             }
             currentPreviews = loaded.previews
             hud.settle(
-                workspaces: loaded.ring.workspaces,
-                current: loaded.ring.current,
+                workspaces: ring.workspaces,
+                current: ring.current,
                 previews: loaded.previews,
                 wrapsAround: wrapAround
             )
@@ -366,13 +380,13 @@ public final class SwipeController {
         iconTask?.cancel()
         let resolver = iconResolver
         iconTask = Task { [weak self] in
-            let icons = await BlockingWork.run {
-                Self.loadIcons(client: client, resolver: resolver)
+            let loaded = await BlockingWork.run { () -> LoadedIcons in
+                LoadedIcons(icons: Self.loadIcons(client: client, resolver: resolver))
             }
             guard let self, !Task.isCancelled else {
                 return
             }
-            hud.updateIcons(icons)
+            hud.updateIcons(loaded.icons)
         }
     }
 
