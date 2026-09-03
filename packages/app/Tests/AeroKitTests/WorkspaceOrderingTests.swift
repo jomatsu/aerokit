@@ -42,15 +42,15 @@ final class WorkspaceOrderStoreTests: XCTestCase {
     private let suiteName = "WorkspaceOrderStoreTests"
     private var defaults: UserDefaults!
 
-    override func setUp() {
-        super.setUp()
+    /// Async overrides: they inherit the class's MainActor isolation, which
+    /// the newer SDK requires for touching MainActor-isolated state.
+    override func setUp() async throws {
         defaults = UserDefaults(suiteName: suiteName)
         defaults.removePersistentDomain(forName: suiteName)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         defaults.removePersistentDomain(forName: suiteName)
-        super.tearDown()
     }
 
     func testFallsBackToDefaultOrder() {
