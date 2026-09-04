@@ -121,7 +121,7 @@ final class SwipeWorkspaceLoaderTests: XCTestCase {
     func testAsyncLoadRingAndPreviewsSkipsPreviewWorkWhenNotRequested() async {
         let runner = ScriptedCommandRunner()
         runner.listWorkspacesOutput = workspaceList([("1", false), ("2", true), ("3", false)])
-        let calls = CallCounter()
+        let calls = PreviewCallCounter()
 
         let loaded = await loader.loadRingAndPreviews(
             client: client(runner),
@@ -167,6 +167,23 @@ final class SwipeWorkspaceLoaderTests: XCTestCase {
     private func windowLine(id: String, bundle: String, app: String, workspace: String) -> String {
         [id, bundle, app, workspace, "Title", "tiling", "h_tiles", "v_tiles"].joined(separator: us)
     }
+
+    /// Counts preview-closure invocations off the main actor; lock-guarded
+    /// because `loadRingAndPreviews` hops through BlockingWork.
+    private final class PreviewCallCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        var count: Int {
+            lock.withLock { value }
+        }
+
+        func increment() {
+            lock.lock()
+            value += 1
+            lock.unlock()
+        }
+    }
 }
 
 /// Records invocations and replays canned AeroSpace listings.
@@ -206,20 +223,5 @@ private final class ScriptedCommandRunner: CommandRunning, @unchecked Sendable {
 
     private static func ok(_ output: String) -> ProcessResult {
         ProcessResult(standardOutput: output, standardError: "", terminationStatus: 0)
-    }
-}
-
-private final class CallCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = 0
-
-    var count: Int {
-        lock.withLock { value }
-    }
-
-    func increment() {
-        lock.lock()
-        value += 1
-        lock.unlock()
     }
 }
