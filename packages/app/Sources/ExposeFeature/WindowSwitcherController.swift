@@ -38,8 +38,9 @@ public final class WindowSwitcherController {
     /// waiting on the CLI can tell and drop its stale result.
     private var presentEpoch = 0
     /// Set when the trigger modifiers were released while the presentation
-    /// was still loading: the strip then commits as soon as it lands
-    /// instead of appearing for a hand that is already gone.
+    /// was still loading (or in the hop before the tap existed): the strip
+    /// still appears — a quick tap must flash feedback — then commits on
+    /// the next runloop tick, matching the workspace Switcher.
     private var commitOnLoad = false
     private var cancellables: Set<AnyCancellable> = []
 
@@ -206,23 +207,36 @@ public final class WindowSwitcherController {
         let session = makeSession(from: context, initial: initial, on: screen)
         self.session = session
 
-        // The modifiers were released while the CLI round trip ran: commit
-        // the landed selection without showing a strip for a hand that is
-        // already gone.
-        if commitOnLoad {
-            commitOnLoad = false
-            let id = session.selectedEntry?.window.id
-            dismiss()
-            focus(id: id)
-            return
-        }
-
         overlay.show(session: session, cardWidth: cardWidth(for: session.entries.count, on: screen), on: screen)
         // The fallback owns repeats via the panel from here; release Carbon.
         if interceptor == nil {
             unregisterHotKeys()
         }
         startCaptures(session: session, screen: screen, bounds: context.bounds)
+        // Modifiers already released: still show (visual feedback) then
+        // commit next tick so the strip can paint, matching SwiftUIOverlay.
+        commitAfterShowingIfNeeded()
+    }
+
+    /// Quick-tap path: the strip is on screen, the trigger is already up,
+    /// so commit on the next runloop turn rather than skipping `show()`.
+    /// `presentEpoch` drops a commit whose presentation was cancelled or
+    /// superseded before the tick lands.
+    private func commitAfterShowingIfNeeded() {
+        guard commitOnLoad else {
+            return
+        }
+        commitOnLoad = false
+        let epoch = presentEpoch
+        // Quick-tap path: the strip is on screen, the trigger is already up,
+        // so hold for ~100ms so the eye sees the feedback before committing,
+        // matching the plan ("strip flashes feedback, commit is a no-op").
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self, epoch == presentEpoch, overlay.isVisible else {
+                return
+            }
+            commit()
+        }
     }
 
     /// Builds the cycling session: recency order capped so huge workspaces

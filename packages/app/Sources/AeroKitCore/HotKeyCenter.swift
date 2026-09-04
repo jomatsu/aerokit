@@ -95,7 +95,10 @@ public final class HotKeyCenter {
                     return noErr
                 }
 
-                Task { @MainActor in
+                // The Carbon handler on GetApplicationEventTarget() already
+                // runs on the main thread. A detached Task { @MainActor }
+                // hop lets key releases slip past before onPressed runs.
+                MainActor.assumeIsolated {
                     center.onPressed?(role)
                 }
                 return noErr

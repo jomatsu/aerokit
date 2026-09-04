@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -7,6 +8,19 @@ public enum ScreenCapturePermission {
     }
 
     public static func request() -> Bool {
-        CGRequestScreenCaptureAccess()
+        if isGranted {
+            return true
+        }
+        // If the app is already listed in System Settings (e.g. from a
+        // previous install), CGRequestScreenCaptureAccess() returns false
+        // without showing a dialog. Callers should follow up with
+        // openSettings() when this returns false.
+        return CGRequestScreenCaptureAccess() || isGranted
+    }
+
+    public static func openSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            _ = NSWorkspace.shared.open(url)
+        }
     }
 }

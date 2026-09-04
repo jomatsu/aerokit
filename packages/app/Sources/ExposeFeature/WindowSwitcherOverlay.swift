@@ -22,8 +22,13 @@ final class WindowSwitcherOverlay {
     }
 
     /// True while hide() is ordering the panel out; its resign must not
-    /// re-enter onCancel/dismiss mid-teardown.
+    /// re-enter onCancel/dismiss mid-teardown. Stays set until the next
+    /// runloop turn (or the next show) so a delayed resignKey from
+    /// orderOut cannot cancel a strip that re-opens on this tick.
     private var isHiding = false
+    /// Bumped on every show/hide so a deferred isHiding reset cannot
+    /// clear a newer teardown's swallow window.
+    private var hideGeneration = 0
 
     init() {
         panel = OverlayPanel(contentRect: .zero)
@@ -31,12 +36,19 @@ final class WindowSwitcherOverlay {
             self?.keyHandler?(event) ?? false
         }
         panel.onResignKey = { [weak self] in
-            guard let self, isVisible, !isHiding else { return }
+            // orderOut resigns key; a stale callback after a re-show must
+            // not dismiss the new presentation. Cmd-Tab away still cancels
+            // because the panel is visible, not hiding, and no longer key.
+            guard let self, isVisible, !isHiding, !panel.isKeyWindow else { return }
             onCancel?()
         }
     }
 
     func show(session: WindowCycleSession, cardWidth: CGFloat, on screen: NSScreen) {
+        // A hide() that has not yet cleared isHiding (next-tick reset)
+        // must not block this presentation or its later resign-to-cancel.
+        hideGeneration += 1
+        isHiding = false
         let cardHeight = cardWidth * 9 / 16
         let view = WindowSwitcherStripView(session: session, cardSize: CGSize(width: cardWidth, height: cardHeight))
         let hostingView = NSHostingView(rootView: view)
@@ -65,10 +77,23 @@ final class WindowSwitcherOverlay {
     }
 
     func hide() {
+        guard !isHiding else {
+            return
+        }
         isHiding = true
+        hideGeneration += 1
+        let generation = hideGeneration
         panel.orderOut(nil)
-        isHiding = false
         panel.contentView = nil
         hostingView = nil
+        // Leave isHiding set until the next turn so a delayed resignKey
+        // from orderOut cannot cancel a strip that re-opens on this tick
+        // (quick tap: show, then commit/hide on the next runloop).
+        DispatchQueue.main.async { [weak self] in
+            guard let self, isHiding, hideGeneration == generation else {
+                return
+            }
+            isHiding = false
+        }
     }
 }

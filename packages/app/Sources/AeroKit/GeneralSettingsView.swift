@@ -61,6 +61,9 @@ final class GeneralSettingsModel: ObservableObject {
 
     func requestScreenCapturePermission() {
         _ = ScreenCapturePermission.request()
+        if !ScreenCapturePermission.isGranted {
+            ScreenCapturePermission.openSettings()
+        }
         refreshStatus()
     }
 

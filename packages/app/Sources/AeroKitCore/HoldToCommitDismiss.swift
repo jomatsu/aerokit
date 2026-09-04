@@ -36,6 +36,10 @@ public final class HoldToCommitDismiss {
         guard !flags.isEmpty else {
             return false
         }
+        // Query the login session's modifier state from WindowServer.
+        // Using .combinedSessionState respects remapped keys (System Settings,
+        // Karabiner, Hammerspoon, etc.) and matches the logical coordinate
+        // system of the registered hotkey and event stream.
         let state = CGEventSource.flagsState(.combinedSessionState)
         if flags.contains(.option), !state.contains(.maskAlternate) {
             return false
