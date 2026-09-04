@@ -9,6 +9,9 @@ final class GeneralSettingsModel: ObservableObject {
     /// nil while a probe is in flight (also the initial state).
     @Published private(set) var aeroSpaceHealth: AeroSpaceHealth?
 
+    @Published private(set) var isRequestingScreenCapture = false
+    @Published private(set) var screenCaptureError: String?
+
     @Published var launchAtLogin: Bool {
         didSet {
             // Comparing against the actual SMAppService state both prevents
@@ -27,6 +30,13 @@ final class GeneralSettingsModel: ObservableObject {
     /// the state the process started with to know when a relaunch is pending.
     private let grantedAtLaunch: Bool
 
+    /// Running bundle's display name so Dev and release are distinguishable.
+    let currentAppDisplayName: String
+
+    var screenCaptureHelp: LocalizedStringKey {
+        "Required for workspace previews and the window overview. This build is \(currentAppDisplayName)."
+    }
+
     private let client: AeroSpaceClient
     private var healthTask: Task<Void, Never>?
 
@@ -39,10 +49,14 @@ final class GeneralSettingsModel: ObservableObject {
         grantedAtLaunch = ScreenCapturePermission.isGranted
         screenCaptureGranted = grantedAtLaunch
         launchAtLogin = LaunchAtLogin.isEnabled
+        currentAppDisplayName = CurrentAppScreenCaptureRegistration.Identity.runningDisplayName()
     }
 
     func refreshStatus() {
         screenCaptureGranted = ScreenCapturePermission.isGranted
+        if screenCaptureGranted {
+            screenCaptureError = nil
+        }
         launchAtLogin = LaunchAtLogin.isEnabled
         refreshAeroSpaceHealth()
     }
@@ -59,12 +73,43 @@ final class GeneralSettingsModel: ObservableObject {
         }
     }
 
+    /// Reset this build's Screen Recording TCC entry, then request access.
+    /// Only `tccutil` hops off the main actor; the system prompt and Settings
+    /// link stay on the main actor. A second press is ignored until it finishes.
     func requestScreenCapturePermission() {
-        _ = ScreenCapturePermission.request()
-        if !ScreenCapturePermission.isGranted {
-            ScreenCapturePermission.openSettings()
+        guard !isRequestingScreenCapture else { return }
+        screenCaptureError = nil
+        if ScreenCapturePermission.isGranted {
+            screenCaptureGranted = true
+            return
         }
+        isRequestingScreenCapture = true
+        Task { @MainActor [weak self] in
+            let reset = await BlockingWork.run {
+                CurrentAppScreenCaptureRegistration.resetCurrentApp()
+            }
+            self?.completeScreenCaptureRegistration(reset)
+        }
+    }
+
+    private func completeScreenCaptureRegistration(
+        _ reset: CurrentAppScreenCaptureRegistration.ResetOutcome
+    ) {
+        let outcome = CurrentAppScreenCaptureRegistration.complete(after: reset)
+        switch outcome {
+        case .alreadyGranted, .completed:
+            screenCaptureError = nil
+        case .failed(.missingAppIdentity):
+            screenCaptureError = "Couldn't identify this running app, so Screen Recording was not reset."
+        case .failed(.resetFailed):
+            screenCaptureError = "Couldn't re-register \(currentAppDisplayName) for Screen Recording."
+        }
+        isRequestingScreenCapture = false
         refreshStatus()
+    }
+
+    func openScreenRecordingSettings() {
+        ScreenCapturePermission.openSettings()
     }
 
     func restartApplication() {
@@ -83,6 +128,15 @@ struct GeneralSettingsView: View {
 
             SettingsSection("Permissions") {
                 permissionRow
+            }
+
+            if let message = model.screenCaptureError {
+                SettingsErrorBanner(
+                    message,
+                    actionTitle: "Open Screen Recording Settings…"
+                ) {
+                    model.openScreenRecordingSettings()
+                }
             }
 
             SettingsSection("General") {
@@ -155,7 +209,7 @@ struct GeneralSettingsView: View {
     private var permissionRow: some View {
         SettingsRow(
             title: "Screen Recording",
-            subtitle: "Required for workspace previews and the window overview"
+            subtitle: model.screenCaptureHelp
         ) {
             if model.needsRelaunch {
                 Button("Relaunch to Apply") {
@@ -167,6 +221,9 @@ struct GeneralSettingsView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.green)
                     .labelStyle(.titleAndIcon)
+            } else if model.isRequestingScreenCapture {
+                ProgressView()
+                    .controlSize(.small)
             } else {
                 Button("Grant Access…") {
                     model.requestScreenCapturePermission()

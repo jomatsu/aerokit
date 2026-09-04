@@ -14,7 +14,9 @@ public enum ScreenCapturePermission {
         // If the app is already listed in System Settings (e.g. from a
         // previous install), CGRequestScreenCaptureAccess() returns false
         // without showing a dialog. Callers should follow up with
-        // openSettings() when this returns false.
+        // openSettings() when this returns false. The settings Grant Access
+        // button uses CurrentAppScreenCaptureRegistration so a replaced
+        // build can reset this app's ScreenCapture TCC entry first.
         return CGRequestScreenCaptureAccess() || isGranted
     }
 
