@@ -14,6 +14,7 @@ public final class SwitcherController {
     private let repository: WorkspaceRepository
     private let snapshotStore: SnapshotStore
     private let snapshotScheduler: SnapshotRefreshScheduler
+    private let snapshotLifecycle: SnapshotLifecycleCoordinator
     private let iconResolver: AppIconResolver
     private let overlay: SwiftUIOverlay
 
@@ -64,6 +65,11 @@ public final class SwitcherController {
             preferences: preferences,
             snapshotStore: snapshotStore,
             engine: SnapshotEngine(configuration: configuration, client: client)
+        )
+        snapshotLifecycle = SnapshotLifecycleCoordinator(
+            configuration: configuration,
+            preferences: preferences,
+            scheduler: snapshotScheduler
         )
         iconResolver = AppIconResolver()
         overlay = SwiftUIOverlay(configuration: configuration, preferences: preferences)
@@ -245,32 +251,31 @@ extension SwitcherController {
     }
 
     private func wireSnapshotScheduler() {
-        snapshotScheduler.onRefreshStarted = { [weak self] in
+        snapshotLifecycle.onStarted = { [weak self] in
             self?.feedbackCoordinator.markStarted()
         }
-        snapshotScheduler.onRefreshProgress = { [weak self] completed, total in
+        snapshotLifecycle.onProgress = { [weak self] completed, total in
             self?.feedbackCoordinator.markProgress(completed: completed, total: total)
         }
-        snapshotScheduler.onRefreshFinished = { [weak self] _, reason in
-            guard let self else { return }
-            feedbackCoordinator.markFinished()
-            // A background run in flight when auto-refresh was switched off
-            // outlives the toggle's purge; its promoted captures must not
-            // resurrect what the user just deleted. Explicit requests
-            // (refresh button, menu) keep their result regardless.
-            if !preferences.autoRefresh, reason != .request {
-                deleteSnapshotsFromDisk()
-            }
+        snapshotLifecycle.onFinished = { [weak self] in
+            self?.feedbackCoordinator.markFinished()
         }
-        snapshotScheduler.onRefreshFailed = { [weak self] message in
+        snapshotLifecycle.onFailed = { [weak self] message in
             self?.feedbackCoordinator.markFailed(message)
             self?.logError("Snapshot refresh failed: \(message)")
         }
-        snapshotScheduler.onRequestReceived = { [weak self] reason in
-            guard reason == .workspaceChange else {
-                return
-            }
+        snapshotLifecycle.onWorkspaceChangeRequest = { [weak self] in
             self?.hide()
+        }
+        snapshotLifecycle.onInvalidatePresentation = { [weak self] in
+            self?.presentationCache = nil
+        }
+        snapshotLifecycle.onLogError = { [weak self] message in
+            self?.logError(message)
+        }
+        snapshotLifecycle.onPurgeCompleted = { [weak self] in
+            self?.settingsModel.refreshStatus()
+            self?.updateOverlayIfVisible()
         }
 
         feedbackCoordinator.onChange = { [weak self] in
@@ -297,19 +302,7 @@ extension SwitcherController {
             .sink { [weak self] _ in self?.refreshWorkspacesAsync() }
             .store(in: &cancellables)
 
-        // Captured previews are recognizable window images plus a manifest
-        // of window titles; they must not outlive the user's intent. Turning
-        // auto-refresh off cancels queued captures and deletes the on-disk
-        // tree — the refresh button recreates it on demand.
-        preferences.$autoRefresh.dropFirst()
-            .removeDuplicates()
-            .filter { !$0 }
-            .sink { [weak self] _ in
-                guard let self else { return }
-                snapshotScheduler.cancelPending()
-                deleteSnapshotsFromDisk()
-            }
-            .store(in: &cancellables)
+        snapshotLifecycle.startObserving()
 
         // Reordering in either settings pane re-sorts the grid right away.
         workspaceOrderStore.$order.dropFirst()
@@ -498,27 +491,6 @@ extension SwitcherController {
         }
 
         return true
-    }
-
-    /// Removes every stored capture (images and the title manifest). The
-    /// overlay and the swipe HUD fall back to placeholders on their next
-    /// lookup; a manual refresh recreates the tree.
-    private func deleteSnapshotsFromDisk() {
-        presentationCache = nil
-        let rootPath = configuration.snapshotRootPath
-        performInBackground {
-            do {
-                try FileManager.default.removeItem(atPath: rootPath)
-            } catch let error as CocoaError where error.code == .fileNoSuchFile {
-                // Nothing captured yet — already the state the purge wants.
-            }
-        } then: { result in
-            if case let .failure(error) = result {
-                self.logError("Failed to delete previews: \(error)")
-            }
-            self.settingsModel.refreshStatus()
-            self.updateOverlayIfVisible()
-        }
     }
 
     private func prewarmSnapshotCache() {

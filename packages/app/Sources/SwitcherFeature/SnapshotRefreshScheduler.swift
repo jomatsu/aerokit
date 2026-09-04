@@ -17,7 +17,11 @@ public final class SnapshotRefreshScheduler {
     private let configuration: SwitcherConfiguration
     private let preferences: AppPreferences
     private let snapshotStore: SnapshotStore
-    private let engine: SnapshotEngine
+    private let now: () -> Date
+    private let scheduleTimer: (TimeInterval, @escaping @MainActor () -> Void) -> Timer
+    private let invalidateTimer: (Timer) -> Void
+    private let isScreenRecordingGranted: () -> Bool
+    private let performRefresh: (Set<String>, @escaping @Sendable (Int, Int) -> Void) async throws -> URL
 
     private var debounceTimer: Timer?
     private var requestWatcher: (any DispatchSourceFileSystemObject)?
@@ -28,16 +32,50 @@ public final class SnapshotRefreshScheduler {
     private var lastStartedAt = Date.distantPast
     private var retryAfterFailureAt = Date.distantPast
 
-    public init(
+    public convenience init(
         configuration: SwitcherConfiguration,
         preferences: AppPreferences,
         snapshotStore: SnapshotStore,
         engine: SnapshotEngine
     ) {
+        self.init(
+            configuration: configuration,
+            preferences: preferences,
+            snapshotStore: snapshotStore,
+            now: { Date() },
+            scheduleTimer: { delay, fire in
+                Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+                    Task { @MainActor in
+                        fire()
+                    }
+                }
+            },
+            invalidateTimer: { $0.invalidate() },
+            isScreenRecordingGranted: { ScreenCapturePermission.isGranted },
+            performRefresh: { exclusions, onProgress in
+                try await engine.refresh(excluding: exclusions, onProgress: onProgress)
+            }
+        )
+    }
+
+    init(
+        configuration: SwitcherConfiguration,
+        preferences: AppPreferences,
+        snapshotStore: SnapshotStore,
+        now: @escaping () -> Date,
+        scheduleTimer: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> Timer,
+        invalidateTimer: @escaping (Timer) -> Void,
+        isScreenRecordingGranted: @escaping () -> Bool,
+        performRefresh: @escaping (Set<String>, @escaping @Sendable (Int, Int) -> Void) async throws -> URL
+    ) {
         self.configuration = configuration
         self.preferences = preferences
         self.snapshotStore = snapshotStore
-        self.engine = engine
+        self.now = now
+        self.scheduleTimer = scheduleTimer
+        self.invalidateTimer = invalidateTimer
+        self.isScreenRecordingGranted = isScreenRecordingGranted
+        self.performRefresh = performRefresh
     }
 
     deinit {
@@ -111,7 +149,9 @@ public final class SnapshotRefreshScheduler {
     /// guards new requests, but an armed timer would still fire
     /// `startRefresh` and recapture right after the purge.
     public func cancelPending() {
-        debounceTimer?.invalidate()
+        if let debounceTimer {
+            invalidateTimer(debounceTimer)
+        }
         debounceTimer = nil
         pendingReason = nil
         queuedReason = nil
@@ -122,7 +162,7 @@ public final class SnapshotRefreshScheduler {
         guard force || preferences.autoRefresh else {
             return false
         }
-        guard force || retryAfterFailureAt.timeIntervalSinceNow <= 0 else {
+        guard force || retryAfterFailureAt.timeIntervalSince(now()) <= 0 else {
             return false
         }
 
@@ -132,7 +172,9 @@ public final class SnapshotRefreshScheduler {
         }
 
         pendingReason = reason
-        debounceTimer?.invalidate()
+        if let debounceTimer {
+            invalidateTimer(debounceTimer)
+        }
 
         let delay: TimeInterval
         if force {
@@ -140,25 +182,25 @@ public final class SnapshotRefreshScheduler {
         } else {
             let settleDelay = settleInterval(for: reason)
             let nextAllowed = lastStartedAt.addingTimeInterval(preferences.refreshFrequency.minInterval)
-            let minIntervalDelay = max(0, nextAllowed.timeIntervalSinceNow)
+            let minIntervalDelay = max(0, nextAllowed.timeIntervalSince(now()))
             delay = max(settleDelay, minIntervalDelay)
         }
 
-        debounceTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                self?.startRefresh()
-            }
+        debounceTimer = scheduleTimer(delay) { [weak self] in
+            self?.startRefresh()
         }
         return true
     }
 
     private func startRefresh() {
-        debounceTimer?.invalidate()
+        if let debounceTimer {
+            invalidateTimer(debounceTimer)
+        }
         debounceTimer = nil
 
-        guard ScreenCapturePermission.isGranted else {
+        guard isScreenRecordingGranted() else {
             pendingReason = nil
-            retryAfterFailureAt = Date().addingTimeInterval(configuration.snapshotFailureBackoff)
+            retryAfterFailureAt = now().addingTimeInterval(configuration.snapshotFailureBackoff)
             onRefreshFailed?("Screen Recording permission is required for AeroKit.app")
             return
         }
@@ -166,14 +208,14 @@ public final class SnapshotRefreshScheduler {
         let reason = pendingReason
         pendingReason = nil
         isRunning = true
-        lastStartedAt = Date()
+        lastStartedAt = now()
         onRefreshStarted?()
 
         let exclusions = preferences.snapshotExclusions
-        Task { @MainActor [engine] in
+        Task { @MainActor in
             let result: Result<URL?, any Error>
             do {
-                result = try await .success(engine.refresh(excluding: exclusions) { completed, total in
+                result = try await .success(performRefresh(exclusions) { completed, total in
                     Task { @MainActor [weak self] in
                         self?.onRefreshProgress?(completed, total)
                     }
@@ -193,12 +235,15 @@ public final class SnapshotRefreshScheduler {
             retryAfterFailureAt = Date.distantPast
             onRefreshFinished?(directory, triggeringReason)
         case let .failure(error):
-            retryAfterFailureAt = Date().addingTimeInterval(configuration.snapshotFailureBackoff)
+            retryAfterFailureAt = now().addingTimeInterval(configuration.snapshotFailureBackoff)
             onRefreshFailed?("\(error)")
         }
 
         if let queuedReason {
             self.queuedReason = nil
+            // Follow-up is never forced: a `.request` queued while a run was
+            // already in flight goes through the autoRefresh / backoff /
+            // settle path, not `refreshNow`.
             schedule(reason: queuedReason)
         }
     }
