@@ -15,18 +15,73 @@ enum ExposeScope {
     case app
 }
 
+/// Narrow test/production seams for WindowServer reads, overlay effects, and
+/// physical input. Public construction still wires the live overlay, capturer,
+/// and digit tap.
+@MainActor
+struct ExposeControllerHooks {
+    var windowBounds: @Sendable () -> [CGWindowID: CGRect]
+    var resolveScreen: (Int?) -> NSScreen?
+    var isVisible: () -> Bool
+    var show: (ExposeSession, NSScreen, Bool, ExposeOverlayMotion.Edge) -> Void
+    var hide: () -> Void
+    var beginEntry: () -> Void
+    var isAccessibilityGranted: () -> Bool
+    var startDigitTap: () -> Bool
+    var stopDigitTap: () -> Void
+    var scheduleEntryDeadline: (Int, @escaping @MainActor () -> Void) -> Void
+    /// Fires after the off-main query returns, before the epoch guard, so a
+    /// superseded load can be observed without sleeping.
+    var presentationQueryFinished: () -> Void
+    var capturesPreviews: Bool
+
+    static func live(
+        overlay: ExposeOverlay,
+        capturer: WindowImageCapturer,
+        interceptor: ExposeDigitInterceptor
+    ) -> ExposeControllerHooks {
+        ExposeControllerHooks(
+            windowBounds: { capturer.windowBoundsByID() },
+            resolveScreen: { PresentationScreenResolver.screen(for: $0) },
+            isVisible: { overlay.isVisible },
+            show: { session, screen, showsGroupingHint, edge in
+                overlay.show(
+                    session: session,
+                    on: screen,
+                    showsGroupingHint: showsGroupingHint,
+                    slidesFrom: edge
+                )
+            },
+            hide: { overlay.hide() },
+            beginEntry: { overlay.beginEntry() },
+            isAccessibilityGranted: { AccessibilityPermission.isGranted },
+            startDigitTap: { interceptor.start() },
+            stopDigitTap: { interceptor.stop() },
+            scheduleEntryDeadline: { milliseconds, work in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(milliseconds))
+                    work()
+                }
+            },
+            presentationQueryFinished: {},
+            capturesPreviews: true
+        )
+    }
+}
+
 /// Wires the exposé hotkeys, the AeroSpace CLI, the capture pipeline, and the
 /// overlay into the toggle-overview-click-to-focus loop.
 @MainActor
 public final class ExposeController {
     private let client: AeroSpaceClient
-    private let capturer = WindowImageCapturer()
+    private let capturer: WindowImageCapturer
     private let iconResolver = AppIconResolver()
     private let hotKeyCenter: HotKeyCenter
     private let preferences: ExposePreferences
     private let settingsModel = ExposeSettingsModel()
-    private let overlay = ExposeOverlay()
-    private let digitInterceptor = ExposeDigitInterceptor()
+    private let overlay: ExposeOverlay?
+    private let digitInterceptor: ExposeDigitInterceptor
+    private let hooks: ExposeControllerHooks
 
     private var session: ExposeSession?
     /// Scope of the most recent presentation request; kept even when the
@@ -57,7 +112,7 @@ public final class ExposeController {
     /// True while an overview is visible or being loaded — the window
     /// switcher defers to it (the two fight over the same key events).
     public var isActive: Bool {
-        overlay.isVisible || presentTask != nil
+        hooks.isVisible() || presentTask != nil
     }
 
     /// True when the settings window should open on launch: ⌥-digit quick
@@ -73,25 +128,49 @@ public final class ExposeController {
     }
 
     public init(client: AeroSpaceClient, hotKeyCenter: HotKeyCenter, preferences: ExposePreferences) {
+        let overlay = ExposeOverlay()
+        let capturer = WindowImageCapturer()
+        let interceptor = ExposeDigitInterceptor()
         self.client = client
         self.hotKeyCenter = hotKeyCenter
         self.preferences = preferences
+        self.overlay = overlay
+        self.capturer = capturer
+        digitInterceptor = interceptor
+        hooks = .live(overlay: overlay, capturer: capturer, interceptor: interceptor)
+    }
+
+    /// Test seam: WindowServer queries, overlay effects, and the digit tap
+    /// can be replaced without changing the public initializer.
+    init(
+        client: AeroSpaceClient,
+        hotKeyCenter: HotKeyCenter,
+        preferences: ExposePreferences,
+        hooks: ExposeControllerHooks
+    ) {
+        self.client = client
+        self.hotKeyCenter = hotKeyCenter
+        self.preferences = preferences
+        overlay = nil
+        capturer = WindowImageCapturer()
+        digitInterceptor = ExposeDigitInterceptor()
+        self.hooks = hooks
     }
 
     public func start() {
-        overlay.onCancel = { [weak self] in self?.dismiss() }
-        overlay.onActivate = { [weak self] index in self?.activate(index) }
-        overlay.onMove = { [weak self] move in self?.session?.move(move) }
-        overlay.onHover = { [weak self] index in self?.session?.select(index) }
-        overlay.onToggleGrouping = { [weak self] in self?.toggleGrouping() }
-        overlay.onCloseSelected = { [weak self] in self?.closeSelected() }
-        overlay.onMoveSelectedToWorkspace = { [weak self] workspace in
+        overlay?.onCancel = { [weak self] in self?.dismiss() }
+        overlay?.onActivate = { [weak self] index in self?.activate(index) }
+        overlay?.onMove = { [weak self] move in self?.session?.move(move) }
+        overlay?.onHover = { [weak self] index in self?.session?.select(index) }
+        overlay?.onToggleGrouping = { [weak self] in self?.toggleGrouping() }
+        overlay?.onCloseSelected = { [weak self] in self?.closeSelected() }
+        overlay?.onMoveSelectedToWorkspace = { [weak self] workspace in
             self?.moveSelected(toWorkspace: workspace)
         }
-        overlay.onMoveToWorkspace = { [weak self] id, workspace in
+        overlay?.onMoveToWorkspace = { [weak self] id, workspace in
             self?.moveWindow(id: id, toWorkspace: workspace)
         }
-        overlay.groupToggleKey = preferences.groupToggleCharacter
+        overlay?.groupToggleKey = preferences.groupToggleCharacter
         digitInterceptor.onDigit = { [weak self] digit in self?.quickSelectDigit(digit) }
 
         settingsModel.onHotKeyRecordingChanged = { [weak self] isRecording in
@@ -126,7 +205,7 @@ public final class ExposeController {
     /// The other scope's hotkey while the overview is open switches scopes
     /// instead of dismissing, mirroring Mission Control vs App Exposé.
     private func toggle(scope: ExposeScope) {
-        let isActive = overlay.isVisible || presentTask != nil
+        let isActive = hooks.isVisible() || presentTask != nil
         if isActive {
             dismiss()
             if scope == requestedScope {
@@ -177,7 +256,7 @@ public final class ExposeController {
             .sink { [weak self] _ in self?.registerAppHotKey() }
             .store(in: &cancellables)
         preferences.$groupToggleKey.dropFirst()
-            .sink { [weak self] key in self?.overlay.groupToggleKey = key.first ?? "0" }
+            .sink { [weak self] key in self?.overlay?.groupToggleKey = key.first ?? "0" }
             .store(in: &cancellables)
         preferences.$threeFingerSwipe.dropFirst()
             .sink { [weak self] _ in self?.onSwipePreferenceChanged?() }
@@ -185,19 +264,6 @@ public final class ExposeController {
     }
 
     // MARK: - Presentation
-
-    /// Everything the presentation needs from off-main queries: the
-    /// workspace's windows, the focused window, and all window bounds.
-    /// `@unchecked` because the preview/icon images are AppKit objects:
-    /// the context is built inside one nonisolated call, handed to the
-    /// main actor exactly once, and never mutated afterwards.
-    private struct PresentationContext: @unchecked Sendable {
-        var snapshot: WorkspaceSnapshot
-        var focusedWindowID: CGWindowID?
-        var bounds: [CGWindowID: CGRect]
-        var workspaceTargets: [WorkspaceTarget] = []
-        var workspacePreviews: [String: NSImage] = [:]
-    }
 
     private func present(scope: ExposeScope) {
         presentEpoch += 1
@@ -209,23 +275,32 @@ public final class ExposeController {
 
     private func runPresentation(epoch: Int, scope: ExposeScope) async {
         let client = client
-        let capturer = capturer
+        let windowBounds = hooks.windowBounds
         let preview = workspacePreview
         // The context helpers run off the main actor and route each blocking
         // CLI round trip through BlockingWork; the WindowServer queries stay
         // inline. A wedged server can't pin a cooperative-pool thread.
-        let context: PresentationContext? = switch scope {
+        let context: ExposePresentationLoader.PresentationContext? = switch scope {
         case .workspace:
-            await Self.workspaceContext(client: client, capturer: capturer, preview: preview)
+            await ExposePresentationLoader.workspaceContext(
+                client: client,
+                windowBounds: windowBounds,
+                preview: preview
+            )
         case .app:
-            await Self.appContext(client: client, capturer: capturer, preview: preview)
+            await ExposePresentationLoader.appContext(
+                client: client,
+                windowBounds: windowBounds,
+                preview: preview
+            )
         }
+        hooks.presentationQueryFinished()
 
         guard epoch == presentEpoch else {
             return
         }
         presentTask = nil
-        guard let context, let screen = screen(for: context.snapshot.screenNumber) else {
+        guard let context, let screen = hooks.resolveScreen(context.snapshot.screenNumber) else {
             return
         }
 
@@ -241,158 +316,48 @@ public final class ExposeController {
             workspacePreviews: context.workspacePreviews
         )
         self.session = session
-        overlay.show(
-            session: session,
-            on: screen,
-            showsGroupingHint: scope == .workspace && preferences.showGroupToggleHint,
+        hooks.show(
+            session,
+            screen,
+            scope == .workspace && preferences.showGroupToggleHint,
             // The motion continues the gesture that owns each scope: the
             // workspace overview rises after a swipe up, app exposé descends
             // after a swipe down — also from hotkeys, so each scope keeps a
             // recognizable signature.
-            slidesFrom: scope == .workspace ? .bottom : .top
+            scope == .workspace ? .bottom : .top
         )
         // The panel is up but transparent; the entry cascade waits for the
         // fast capture pass so the rows rise with real window pictures, not
         // icon placeholders that pop into images mid-animation. A deadline
         // caps the wait — better a rare placeholder than a laggy gesture.
-        startCaptures(session: session, bounds: context.bounds, screen: screen) { [weak self] in
-            self?.overlay.beginEntry()
+        if hooks.capturesPreviews {
+            startCaptures(session: session, bounds: context.bounds, screen: screen) { [weak self] in
+                self?.hooks.beginEntry()
+            }
         }
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(120))
+        let beginEntry = hooks.beginEntry
+        hooks.scheduleEntryDeadline(120) { [weak self] in
             guard let self, epoch == presentEpoch else {
                 return
             }
-            overlay.beginEntry()
+            beginEntry()
         }
 
         startDigitInterceptorIfEnabled()
-    }
-
-    private nonisolated static func workspaceContext(
-        client: AeroSpaceClient,
-        capturer: WindowImageCapturer,
-        preview: @escaping @Sendable (String) -> NSImage?
-    ) async -> PresentationContext? {
-        // The focused-window query only seeds the initial selection, and
-        // the drop-bar content is invisible until a drag starts, so both
-        // run concurrently instead of paying extra CLI round trips before
-        // the overlay can show. Each blocking round trip hops to BlockingWork
-        // so the overlap happens on the GCD pool, not the cooperative one.
-        async let focused = BlockingWork.run { client.focusedWindow() }
-        async let dropBar = BlockingWork.run {
-            Self.loadDropBarContent(preview: preview) {
-                try client.workspacesOnFocusedMonitor(includeEmpty: true)
-            }
-        }
-        guard let snapshot = await BlockingWork.run({
-            Self.loadSnapshot("workspace") { try client.focusedWorkspaceWindows() }
-        }) else {
-            return nil
-        }
-        return await PresentationContext(
-            snapshot: snapshot,
-            focusedWindowID: focused?.id,
-            bounds: capturer.windowBoundsByID(),
-            workspaceTargets: dropBar.targets,
-            workspacePreviews: dropBar.previews
-        )
-    }
-
-    /// The CLI calls are sequential by necessity — the focused window's app
-    /// determines which windows to list.
-    private nonisolated static func appContext(
-        client: AeroSpaceClient,
-        capturer: WindowImageCapturer,
-        preview: @escaping @Sendable (String) -> NSImage?
-    ) async -> PresentationContext? {
-        // The bounds query talks to the WindowServer, not the CLI, so it can
-        // overlap the dependent CLI round trips; the drop-bar content is
-        // invisible until a drag starts, so it loads concurrently too. The
-        // CLI round trips hop to BlockingWork; the WindowServer query stays
-        // on the cooperative pool because it can't wedge the way the CLI can.
-        async let bounds = capturer.windowBoundsByID()
-        // The app's windows span monitors, so every workspace is a valid
-        // drop target.
-        async let dropBar = BlockingWork.run {
-            Self.loadDropBarContent(preview: preview) { try client.listWorkspaces() }
-        }
-        guard let focused = await BlockingWork.run({ client.focusedWindow() }) else {
-            log.error("app exposé: no focused window")
-            return nil
-        }
-        guard var snapshot = await BlockingWork.run({
-            Self.loadSnapshot("app") {
-                try client.appWindows(bundleIdentifier: focused.bundleIdentifier, pid: focused.pid)
-            }
-        }) else {
-            return nil
-        }
-        // The app's windows can span monitors; the overlay belongs on the
-        // one hosting the focused window.
-        snapshot.screenNumber = focused.screenNumber ?? snapshot.screenNumber
-        return await PresentationContext(
-            snapshot: snapshot,
-            focusedWindowID: focused.id,
-            bounds: bounds,
-            workspaceTargets: dropBar.targets,
-            workspacePreviews: dropBar.previews
-        )
-    }
-
-    /// The drop bar's workspaces and their snapshot previews (workspaces
-    /// the switcher has not snapshotted yet simply get a placeholder).
-    /// Empty (logged) on CLI failure — the overlay shows no drop bar.
-    /// `@unchecked` for the AppKit images: built inside one nonisolated
-    /// call, consumed once on the main actor, never mutated.
-    private struct DropBarContent: @unchecked Sendable {
-        var targets: [WorkspaceTarget]
-        var previews: [String: NSImage]
-    }
-
-    private nonisolated static func loadDropBarContent(
-        preview: @Sendable (String) -> NSImage?,
-        _ list: () throws -> [(name: String, isFocused: Bool)]
-    ) -> DropBarContent {
-        do {
-            let targets = try list().map { WorkspaceTarget(name: $0.name, isFocused: $0.isFocused) }
-            let previews = targets.reduce(into: [String: NSImage]()) { previews, target in
-                previews[target.name] = preview(target.name)
-            }
-            return DropBarContent(targets: targets, previews: previews)
-        } catch {
-            log.error("listing workspaces failed: \(error)")
-            return DropBarContent(targets: [], previews: [:])
-        }
-    }
-
-    /// nil (logged) on CLI failure, nil on an empty listing — neither shows
-    /// an overlay.
-    private nonisolated static func loadSnapshot(
-        _ label: String,
-        _ list: () throws -> WorkspaceSnapshot
-    ) -> WorkspaceSnapshot? {
-        do {
-            let snapshot = try list()
-            return snapshot.windows.isEmpty ? nil : snapshot
-        } catch {
-            log.error("listing \(label) windows failed: \(error)")
-            return nil
-        }
     }
 
     private func startDigitInterceptorIfEnabled() {
         guard preferences.modifierQuickSelect else {
             return
         }
-        guard AccessibilityPermission.isGranted else {
+        guard hooks.isAccessibilityGranted() else {
             if !warnedAccessibilityMissing {
                 warnedAccessibilityMissing = true
                 log.error("option+digit quick select is on but Accessibility access is missing")
             }
             return
         }
-        if !digitInterceptor.start() {
+        if !hooks.startDigitTap() {
             log.error("could not install the option+digit event tap")
         }
     }
@@ -405,15 +370,6 @@ public final class ExposeController {
             }
         }
         return icons
-    }
-
-    private func screen(for screenNumber: Int?) -> NSScreen? {
-        let screens = NSScreen.screens
-        if let screenNumber, screens.indices.contains(screenNumber - 1) {
-            return screens[screenNumber - 1]
-        }
-        let mouse = NSEvent.mouseLocation
-        return screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? screens.first
     }
 
     // MARK: - Captures
@@ -591,13 +547,13 @@ public final class ExposeController {
     }
 
     private func dismiss() {
-        digitInterceptor.stop()
+        hooks.stopDigitTap()
         presentEpoch += 1
         presentTask?.cancel()
         presentTask = nil
         captureTask?.cancel()
         captureTask = nil
-        overlay.hide()
+        hooks.hide()
         session = nil
     }
 }
@@ -614,7 +570,7 @@ public extension ExposeController {
         guard preferences.threeFingerSwipe else {
             return
         }
-        let isActive = overlay.isVisible || presentTask != nil
+        let isActive = hooks.isVisible() || presentTask != nil
         switch direction {
         case .up:
             if isActive {
