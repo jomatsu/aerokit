@@ -67,6 +67,9 @@ public final class SnapshotEngine: Sendable {
     private let configuration: SwitcherConfiguration
     private let client: AeroSpaceClient
     private let capturer: WindowImageCapturer
+    private let storage: SnapshotRunStorage
+    /// Test-only image source, called concurrently from the capture task group.
+    private let captureImage: (@Sendable (CGWindowID) async -> CGImage?)?
     private var fileManager: FileManager {
         .default
     }
@@ -77,10 +80,21 @@ public final class SnapshotEngine: Sendable {
 
     private let composeImageCache = ComposeImageCache(maxDimension: SnapshotEngine.composeImageMaxDimension)
 
-    public init(configuration: SwitcherConfiguration, client: AeroSpaceClient) {
+    public convenience init(configuration: SwitcherConfiguration, client: AeroSpaceClient) {
+        self.init(configuration: configuration, client: client, storage: SnapshotRunStorage())
+    }
+
+    init(
+        configuration: SwitcherConfiguration,
+        client: AeroSpaceClient,
+        storage: SnapshotRunStorage,
+        captureImage: (@Sendable (CGWindowID) async -> CGImage?)? = nil
+    ) {
         self.configuration = configuration
         self.client = client
         capturer = WindowImageCapturer()
+        self.storage = storage
+        self.captureImage = captureImage
     }
 
     /// Runs a full snapshot refresh and returns the promoted `current` directory.
@@ -114,40 +128,22 @@ public final class SnapshotEngine: Sendable {
             }
 
         let rootURL = URL(fileURLWithPath: configuration.snapshotRootPath, isDirectory: true)
-        let runID = Self.runIDFormatter.string(from: Date())
-        let previousRun = PreviousSnapshotRun.load(fromManifestIn: resolveCurrentDirectory(in: rootURL))
+        let previousRun = PreviousSnapshotRun.load(
+            fromManifestIn: storage.resolveCurrentDirectory(in: rootURL)
+        )
         composeImageCache.prune(keeping: Set(windows.map(\.id)))
 
-        let temporaryDirectory = rootURL.appendingPathComponent(
-            ".next-\(runID)-\(UUID().uuidString.prefix(6))",
-            isDirectory: true
-        )
-        let finalDirectory = rootURL.appendingPathComponent(".current-\(runID)", isDirectory: true)
-
-        do {
-            try fileManager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
-        } catch {
-            throw SnapshotEngineError.outputDirectoryUnavailable(temporaryDirectory.path)
-        }
-
+        let run = try storage.prepareRun(in: rootURL, workspaces: workspaces)
         var promoted = false
         defer {
             if !promoted {
-                try? fileManager.removeItem(at: temporaryDirectory)
+                try? fileManager.removeItem(at: run.temporaryDirectory)
             }
-        }
-
-        for workspace in workspaces {
-            let directory = temporaryDirectory.appendingPathComponent(
-                WorkspaceName.captureDirectoryName(workspace),
-                isDirectory: true
-            )
-            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
 
         let results = await captureWindows(
             windows,
-            into: temporaryDirectory,
+            into: run.temporaryDirectory,
             previousRun: previousRun,
             onProgress: onProgress
         )
@@ -160,12 +156,26 @@ public final class SnapshotEngine: Sendable {
         composeOverviews(
             workspaces: workspaces,
             results: results,
-            outputDirectory: temporaryDirectory,
+            outputDirectory: run.temporaryDirectory,
             previousRun: previousRun
         )
 
-        try writeManifest(results: results, in: temporaryDirectory, finalDirectory: finalDirectory)
-        try promote(temporaryDirectory: temporaryDirectory, to: finalDirectory, in: rootURL)
+        try storage.writeManifest(
+            rows: results.map { result in
+                SnapshotManifestRow(
+                    window: result.window,
+                    relativePath: result.relativePath,
+                    status: result.status
+                )
+            },
+            in: run.temporaryDirectory,
+            finalDirectory: run.finalDirectory
+        )
+        try storage.promote(
+            temporaryDirectory: run.temporaryDirectory,
+            to: run.finalDirectory,
+            in: rootURL
+        )
         promoted = true
 
         return rootURL.appendingPathComponent("current", isDirectory: true)
@@ -179,11 +189,15 @@ public final class SnapshotEngine: Sendable {
         previousRun: PreviousSnapshotRun,
         onProgress: (@Sendable (Int, Int) -> Void)?
     ) async -> [WindowResult] {
-        let context = await CaptureContext(
-            shareable: LazyShareableWindows(capturer: capturer),
-            boundsByID: capturer.windowBoundsByID().mapValues(\.size),
-            displayScale: capturer.maximumDisplayScale()
-        )
+        let context: CaptureContext? = if captureImage == nil {
+            await CaptureContext(
+                shareable: LazyShareableWindows(capturer: capturer),
+                boundsByID: capturer.windowBoundsByID().mapValues(\.size),
+                displayScale: capturer.maximumDisplayScale()
+            )
+        } else {
+            nil
+        }
 
         onProgress?(0, windows.count)
         var completed = 0
@@ -214,7 +228,7 @@ public final class SnapshotEngine: Sendable {
 
     private func captureWindow(
         _ window: WorkspaceWindow,
-        context: CaptureContext,
+        context: CaptureContext?,
         outputDirectory: URL,
         previousEntry: PreviousSnapshotRun.Entry?
     ) async -> WindowResult {
@@ -230,20 +244,25 @@ public final class SnapshotEngine: Sendable {
             return reuseOrFail(.failed)
         }
 
-        // CGWindowListCreateImage first (~9ms/window); ScreenCaptureKit only
-        // when it yields nothing, since SCScreenshotManager costs ~105ms per
-        // window and serializes in replayd.
-        var captured = capturer.captureImageFast(
-            windowID: windowID,
-            maxDimension: Self.composeImageMaxDimension,
-            pointSize: context.boundsByID[windowID]
-        )
-        if captured == nil, let scWindow = await context.shareable.all().byID[windowID] {
-            captured = try? await capturer.captureImage(
-                of: scWindow,
-                displayScale: context.displayScale,
-                maxDimension: Self.composeImageMaxDimension
+        var captured: CGImage?
+        if let captureImage {
+            captured = await captureImage(windowID)
+        } else if let context {
+            // CGWindowListCreateImage first (~9ms/window); ScreenCaptureKit only
+            // when it yields nothing, since SCScreenshotManager costs ~105ms per
+            // window and serializes in replayd.
+            captured = capturer.captureImageFast(
+                windowID: windowID,
+                maxDimension: Self.composeImageMaxDimension,
+                pointSize: context.boundsByID[windowID]
             )
+            if captured == nil, let scWindow = await context.shareable.all().byID[windowID] {
+                captured = try? await capturer.captureImage(
+                    of: scWindow,
+                    displayScale: context.displayScale,
+                    maxDimension: Self.composeImageMaxDimension
+                )
+            }
         }
         guard let image = captured else {
             return reuseOrFail(.failed)
@@ -344,107 +363,6 @@ public final class SnapshotEngine: Sendable {
         }
     }
 
-    // MARK: - Manifest
-
-    private func writeManifest(results: [WindowResult], in directory: URL, finalDirectory: URL) throws {
-        let header = [
-            "timestamp", "workspace", "window_id", "app_id", "app_name", "window_title",
-            "window_layout", "window_parent_container_layout", "workspace_root_container_layout",
-            "file", "status"
-        ].joined(separator: "\t")
-
-        let timestamp = Self.manifestDateFormatter.string(from: Date())
-        let rows = results.map { result in
-            [
-                timestamp,
-                sanitizeField(result.window.workspace),
-                result.window.id,
-                sanitizeField(result.window.bundleIdentifier),
-                sanitizeField(result.window.appName),
-                sanitizeField(result.window.title),
-                result.window.layout,
-                result.window.parentContainerLayout,
-                result.window.workspaceRootContainerLayout,
-                finalDirectory.appendingPathComponent(result.relativePath).path,
-                result.status.rawValue
-            ].joined(separator: "\t")
-        }
-
-        let manifest = ([header] + rows).joined(separator: "\n") + "\n"
-        try manifest.write(to: directory.appendingPathComponent("manifest.tsv"), atomically: true, encoding: .utf8)
-    }
-
-    private func sanitizeField(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\t", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
-    }
-
-    // MARK: - Promotion
-
-    private func resolveCurrentDirectory(in rootURL: URL) -> URL? {
-        let current = rootURL.appendingPathComponent("current", isDirectory: true)
-        let resolved = current.resolvingSymlinksInPath()
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: resolved.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return nil
-        }
-        return resolved
-    }
-
-    private func promote(temporaryDirectory: URL, to finalDirectory: URL, in rootURL: URL) throws {
-        if fileManager.fileExists(atPath: finalDirectory.path) {
-            try? fileManager.removeItem(at: finalDirectory)
-        }
-        try fileManager.moveItem(at: temporaryDirectory, to: finalDirectory)
-
-        let currentLink = rootURL.appendingPathComponent("current")
-        let currentType = (try? fileManager.attributesOfItem(atPath: currentLink.path))?[.type] as? FileAttributeType
-        if let currentType, currentType != .typeSymbolicLink {
-            // A real directory from an older layout: move it aside so the
-            // symlink can take its place, then delete it.
-            let retired = rootURL.appendingPathComponent(".previous-current-\(UUID().uuidString.prefix(6))")
-            try? fileManager.moveItem(at: currentLink, to: retired)
-            try? fileManager.removeItem(at: retired)
-        }
-
-        // rename(2) replaces the existing symlink atomically, so `current`
-        // never dangles even if the app dies mid-promotion.
-        let temporaryLink = rootURL.appendingPathComponent(".current-link-\(UUID().uuidString.prefix(6))")
-        try fileManager.createSymbolicLink(
-            atPath: temporaryLink.path,
-            withDestinationPath: finalDirectory.lastPathComponent
-        )
-        guard rename(temporaryLink.path, currentLink.path) == 0 else {
-            try? fileManager.removeItem(at: temporaryLink)
-            throw SnapshotEngineError.outputDirectoryUnavailable(currentLink.path)
-        }
-
-        cleanupOldRuns(in: rootURL, keeping: finalDirectory.lastPathComponent)
-    }
-
-    private func cleanupOldRuns(in rootURL: URL, keeping keptName: String) {
-        guard let entries = try? fileManager.contentsOfDirectory(atPath: rootURL.path) else {
-            return
-        }
-
-        for entry in entries where entry != keptName {
-            let isEngineRun = entry.hasPrefix(".current-")
-                || entry.hasPrefix(".next-")
-                || entry.hasPrefix(".previous-current-")
-            // Timestamped directories come from the legacy script's --history
-            // mode; require its manifest so user-created folders that happen
-            // to match the pattern survive.
-            let isLegacyRun = entry.range(of: #"^20\d{6}-\d{6}$"#, options: .regularExpression) != nil
-                && fileManager.fileExists(
-                    atPath: rootURL.appendingPathComponent("\(entry)/manifest.tsv").path
-                )
-            if isEngineRun || isLegacyRun {
-                try? fileManager.removeItem(at: rootURL.appendingPathComponent(entry))
-            }
-        }
-    }
-
     // MARK: - Helpers
 
     /// One background hop for both blocking CLI round trips.
@@ -453,18 +371,4 @@ public final class SnapshotEngine: Sendable {
             try (client.listWorkspaces().map(\.name), client.listWindows())
         }
     }
-
-    private static let runIDFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
-
-    private static let manifestDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
 }
