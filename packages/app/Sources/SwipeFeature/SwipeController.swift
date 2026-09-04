@@ -6,6 +6,42 @@ import SwiftUI
 
 private let log = AppLog(category: "swipe")
 
+/// HUD methods the controller drives. Production uses `SwipeHUD`; tests
+/// record the same calls without creating a panel.
+@MainActor
+protocol SwipeHUDEffects: AnyObject {
+    func beginInteractive(
+        workspaces: [String],
+        current: String,
+        previews: [String: NSImage],
+        wrapsAround: Bool
+    )
+    func updateIcons(_ icons: [String: [NSImage]])
+    func setOffset(_ offset: CGFloat)
+    func settle(
+        workspaces: [String],
+        current: String,
+        previews: [String: NSImage],
+        wrapsAround: Bool
+    )
+    func hide()
+}
+
+extension SwipeHUD: SwipeHUDEffects {}
+
+/// Instants and delays the controller uses for own-commit suppression and
+/// the post-commit focus check. Tests substitute a controllable clock so
+/// those paths don't wait on the wall clock.
+struct SwipeClock: Sendable {
+    var now: @Sendable () -> ContinuousClock.Instant
+    var sleep: @Sendable (Duration) async -> Void
+
+    static let system = SwipeClock(
+        now: { .now },
+        sleep: { try? await Task.sleep(for: $0) }
+    )
+}
+
 /// Turns horizontal three-finger gestures into AeroSpace workspace switches
 /// with a finger-attached HUD: the workspace strip appears as the gesture
 /// begins, its selection follows the fingers, and the switch commits when
@@ -17,7 +53,9 @@ public final class SwipeController {
     private let preferences: SwipePreferences
     private let workspaceOrderStore: WorkspaceOrderStore
     private let settingsModel = SwipeSettingsModel()
-    private let hud = SwipeHUD()
+    private let hud: any SwipeHUDEffects
+    private let loader: any SwipeWorkspaceLoading
+    private let clock: SwipeClock
     /// Cached workspace snapshot lookup (the switcher's store) for the
     /// HUD's thumbnail cards; nil images just render placeholders. Sendable
     /// so the gesture's background hop can decode cold-cache thumbnails off
@@ -28,28 +66,9 @@ public final class SwipeController {
     private let iconResolver = AppIconResolver()
     private var cancellables: Set<AnyCancellable> = []
 
-    /// The focused monitor's workspaces resolved when the gesture began.
-    private struct Ring {
-        var workspaces: [String]
-        var current: String
-    }
-
-    /// Sendable carriers for values loaded off the main actor: the AppKit
-    /// images are handed to the main actor exactly once and never mutated
-    /// afterwards. Required because NSImage itself is not Sendable, and the
-    /// macOS 26 SDK checks every BlockingWork boundary.
-    private struct LoadedRing: @unchecked Sendable {
-        var ring: Ring?
-        var previews: [String: NSImage]
-    }
-
-    private struct LoadedIcons: @unchecked Sendable {
-        var icons: [String: [NSImage]]
-    }
-
     /// Resolves while the fingers are still moving so the HUD can appear
     /// mid-gesture; the commit awaits it.
-    private var ringTask: Task<Ring?, Never>?
+    private var ringTask: Task<SwipeWorkspaceLoader.Ring?, Never>?
     /// Loads app icons concurrently with the ring and pushes them into the
     /// HUD when ready — neither the HUD's appearance nor the commit waits
     /// for the extra `list-windows` round trip or the icon disk probes.
@@ -93,15 +112,38 @@ public final class SwipeController {
         preferences.stepDistanceMM
     }
 
-    public init(
+    public convenience init(
         client: AeroSpaceClient,
         workspaceOrder: WorkspaceOrderStore,
         workspacePreview: @escaping @Sendable (String) -> NSImage? = { _ in nil }
     ) {
+        self.init(
+            client: client,
+            workspaceOrder: workspaceOrder,
+            workspacePreview: workspacePreview,
+            preferences: SwipePreferences(),
+            loader: SwipeWorkspaceLoader(),
+            hud: SwipeHUD(),
+            clock: .system
+        )
+    }
+
+    init(
+        client: AeroSpaceClient,
+        workspaceOrder: WorkspaceOrderStore,
+        workspacePreview: @escaping @Sendable (String) -> NSImage?,
+        preferences: SwipePreferences,
+        loader: any SwipeWorkspaceLoading,
+        hud: any SwipeHUDEffects,
+        clock: SwipeClock
+    ) {
         self.client = client
         workspaceOrderStore = workspaceOrder
         self.workspacePreview = workspacePreview
-        preferences = SwipePreferences()
+        self.preferences = preferences
+        self.loader = loader
+        self.hud = hud
+        self.clock = clock
     }
 
     public func start() {
@@ -197,23 +239,18 @@ public final class SwipeController {
         let showHUD = preferences.showHUD
         let preview = workspacePreview
         let previousCommit = commitTask
+        let loader = loader
         ringTask = Task { [weak self] in
             // The previous gesture's switch must land before this ring is
             // read, or AeroSpace still reports the old focused workspace.
             await previousCommit?.value
-            let loaded = await BlockingWork.run { () -> LoadedRing in
-                guard let ring = Self.loadRing(client: client, skipEmpty: skipEmpty, order: order) else {
-                    return LoadedRing(ring: nil, previews: [:])
-                }
-                // The store caches decoded thumbnails, so this is disk-bound
-                // once per snapshot refresh at most — but that cold decode
-                // belongs here, off the main actor, not under the HUD's
-                // first animation frame.
-                let previews = showHUD
-                    ? ring.workspaces.reduce(into: [String: NSImage]()) { $0[$1] = preview($1) }
-                    : [:]
-                return LoadedRing(ring: ring, previews: previews)
-            }
+            let loaded = await loader.loadRingAndPreviews(
+                client: client,
+                skipEmpty: skipEmpty,
+                order: order,
+                includePreviews: showHUD,
+                preview: preview
+            )
             guard let ring = loaded.ring, let self, showHUD else {
                 return loaded.ring
             }
@@ -241,9 +278,7 @@ public final class SwipeController {
         }
         let resolver = iconResolver
         iconTask = Task { [weak self] in
-            let loaded = await BlockingWork.run { () -> LoadedIcons in
-                LoadedIcons(icons: Self.loadIcons(client: client, resolver: resolver))
-            }
+            let loaded = await loader.loadIcons(client: client) { resolver.icon(for: $0) }
             let icons = loaded.icons
             guard let self, !Task.isCancelled else {
                 return
@@ -275,6 +310,7 @@ public final class SwipeController {
         let wrapAround = preferences.wrapAround
         let showHUD = preferences.showHUD
         let client = client
+        let clock = clock
         commitEpoch += 1
         let epoch = commitEpoch
         commitTask = Task { [weak self] in
@@ -304,7 +340,7 @@ public final class SwipeController {
             }
             // Mark before the switch lands: the hook may fire for it before
             // the command returns, and its echo must find the timestamp set.
-            self?.lastOwnCommitAt = .now
+            self?.lastOwnCommitAt = clock.now()
             let switched: Bool = await BlockingWork.run {
                 do {
                     try client.switchToWorkspace(plan.target)
@@ -353,15 +389,16 @@ public final class SwipeController {
         let order = workspaceOrderStore.order
         let wrapAround = preferences.wrapAround
         let preview = workspacePreview
+        let loader = loader
 
         Task { [weak self] in
-            let loaded = await BlockingWork.run { () -> LoadedRing in
-                guard let ring = Self.loadRing(client: client, skipEmpty: skipEmpty, order: order) else {
-                    return LoadedRing(ring: nil, previews: [:])
-                }
-                let previews = ring.workspaces.reduce(into: [String: NSImage]()) { $0[$1] = preview($1) }
-                return LoadedRing(ring: ring, previews: previews)
-            }
+            let loaded = await loader.loadRingAndPreviews(
+                client: client,
+                skipEmpty: skipEmpty,
+                order: order,
+                includePreviews: true,
+                preview: preview
+            )
             guard let self, let ring = loaded.ring, epoch == flashEpoch, shouldShowFlash(), preferences.showHUD else {
                 return
             }
@@ -380,9 +417,7 @@ public final class SwipeController {
         iconTask?.cancel()
         let resolver = iconResolver
         iconTask = Task { [weak self] in
-            let loaded = await BlockingWork.run { () -> LoadedIcons in
-                LoadedIcons(icons: Self.loadIcons(client: client, resolver: resolver))
-            }
+            let loaded = await loader.loadIcons(client: client) { resolver.icon(for: $0) }
             guard let self, !Task.isCancelled else {
                 return
             }
@@ -397,7 +432,7 @@ public final class SwipeController {
         WorkspaceChangeFlash.shouldShow(
             gestureActive: gestureActive,
             lastOwnCommit: lastOwnCommitAt,
-            now: .now
+            now: clock.now()
         )
     }
 
@@ -410,8 +445,9 @@ public final class SwipeController {
     /// screen actually ended on.
     private func verifyFocus(after target: String, epoch: Int) {
         let client = client
+        let sleep = clock.sleep
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
+            await sleep(.seconds(1))
             guard let self, epoch == commitEpoch else {
                 return
             }
@@ -428,50 +464,6 @@ public final class SwipeController {
                 after the commit
                 """
             )
-        }
-    }
-
-    /// Blocking CLI round trips; the caller runs it on BlockingWork. Returns
-    /// nil (logged) when AeroSpace is unreachable or reports no usable
-    /// workspace.
-    private nonisolated static func loadRing(client: AeroSpaceClient, skipEmpty: Bool, order: [String]) -> Ring? {
-        do {
-            let workspaces = try client.workspacesOnFocusedMonitor(includeEmpty: !skipEmpty)
-            // Skipping empty workspaces can drop the focused one (it may
-            // itself be empty), so fall back to asking for it directly.
-            guard let current = try workspaces.first(where: \.isFocused)?.name
-                ?? client.focusedWorkspaceName()
-            else {
-                return nil
-            }
-            let ring = SwipeNavigation.ring(
-                current: current,
-                workspaces: workspaces.map(\.name),
-                priority: order
-            )
-            log.notice("swipe ring: \(ring.joined(separator: " → ")) (current: \(current))")
-            return Ring(workspaces: ring, current: current)
-        } catch {
-            log.error("swipe workspace listing failed: \(error)")
-            return nil
-        }
-    }
-
-    /// Blocking CLI round trip plus icon resolution; the caller runs it on
-    /// BlockingWork. One `list-windows --all` covers every workspace —
-    /// icon-less cards are better than serializing a call per workspace.
-    private nonisolated static func loadIcons(
-        client: AeroSpaceClient,
-        resolver: AppIconResolver
-    ) -> [String: [NSImage]] {
-        do {
-            return try Dictionary(grouping: client.listWindows(), by: \.workspace)
-                .mapValues { windows in
-                    WorkspaceApp.uniqueApps(from: windows).compactMap(resolver.icon(for:))
-                }
-        } catch {
-            log.error("swipe window listing failed: \(error)")
-            return [:]
         }
     }
 }
