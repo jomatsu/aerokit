@@ -198,15 +198,24 @@ final class ExposePresentationLoaderTests: XCTestCase {
     func testDropBarPreviewLookupUsesInjectedClosure() async throws {
         let runner = populatedRunner()
         let image = NSImage(size: NSSize(width: 2, height: 2))
+        let shared = PreviewImage(image: image)
 
         let context = await ExposePresentationLoader.workspaceContext(
             client: runner.makeClient(),
             windowBounds: { [:] },
-            preview: { name in name == "1" ? image : nil }
+            preview: { name in name == "1" ? shared.image : nil }
         )
 
         let loaded = try XCTUnwrap(context)
         XCTAssertIdentical(loaded.workspacePreviews["1"], image)
         XCTAssertNil(loaded.workspacePreviews["2"])
+    }
+
+    /// Immutable test-local fixture that shares one `NSImage` with a
+    /// `@Sendable` preview closure. The image is never mutated while
+    /// shared; `@unchecked` because NSImage is not Sendable on the
+    /// macOS 15 SDK.
+    private struct PreviewImage: @unchecked Sendable {
+        let image: NSImage
     }
 }

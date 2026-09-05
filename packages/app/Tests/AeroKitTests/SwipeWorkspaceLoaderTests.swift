@@ -143,6 +143,7 @@ final class SwipeWorkspaceLoaderTests: XCTestCase {
         let runner = ScriptedCommandRunner()
         runner.listWorkspacesOutput = workspaceList([("1", true)])
         let image = NSImage(size: NSSize(width: 1, height: 1))
+        let shared = PreviewImage(image: image)
 
         let loaded = await loader.loadRingAndPreviews(
             client: client(runner),
@@ -150,7 +151,7 @@ final class SwipeWorkspaceLoaderTests: XCTestCase {
             order: [],
             includePreviews: true
         ) { name in
-            name == "1" ? image : nil
+            name == "1" ? shared.image : nil
         }
 
         XCTAssertIdentical(loaded.previews["1"], image)
@@ -166,6 +167,14 @@ final class SwipeWorkspaceLoaderTests: XCTestCase {
 
     private func windowLine(id: String, bundle: String, app: String, workspace: String) -> String {
         [id, bundle, app, workspace, "Title", "tiling", "h_tiles", "v_tiles"].joined(separator: us)
+    }
+
+    /// Immutable test-local fixture that shares one `NSImage` with a
+    /// `@Sendable` preview closure. The image is never mutated while
+    /// shared; `@unchecked` because NSImage is not Sendable on the
+    /// macOS 15 SDK.
+    private struct PreviewImage: @unchecked Sendable {
+        let image: NSImage
     }
 
     /// Counts preview-closure invocations off the main actor; lock-guarded
