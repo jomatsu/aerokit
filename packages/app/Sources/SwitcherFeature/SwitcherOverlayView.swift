@@ -14,26 +14,46 @@ public struct SwitcherOverlayView: View {
     }
 
     public var body: some View {
-        ZStack {
-            Color.black.opacity(0.001)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    model.cancel()
-                }
+        GeometryReader { proxy in
+            let layout = SwitcherGridLayout(
+                available: proxy.size,
+                count: model.items.count,
+                columns: preferences.gridColumns,
+                configuration: configuration,
+                fullscreen: preferences.fullscreenSwitcher,
+                showTitles: preferences.showWindowTitles,
+                showHints: preferences.showOverlayHints
+            )
+            ZStack {
+                Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.cancel() }
 
-            panel
+                panel(layout: layout)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
     }
 
-    private var panel: some View {
+    private func panel(layout: SwitcherGridLayout) -> some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
                 SnapshotRefreshBadge(feedback: model.snapshotFeedback)
                     .frame(height: 26)
 
-                grid
+                ScrollViewReader { scroll in
+                    ScrollView(.vertical) {
+                        grid(layout: layout)
+                            .padding(4)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .defaultScrollAnchor(.center)
+                    .onChange(of: model.selectedIndex) { _, index in
+                        scroll.scrollTo(index, anchor: .center)
+                    }
+                    .onAppear { scroll.scrollTo(model.selectedIndex, anchor: .center) }
+                }
             }
             .padding(configuration.padding)
 
@@ -41,30 +61,40 @@ public struct SwitcherOverlayView: View {
                 OverlayHintFooter(preferences: preferences)
             }
         }
-        .frame(width: contentSize.width, height: contentSize.height)
+        .frame(width: layout.panelSize.width, height: layout.panelSize.height)
         .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black.opacity(0.73))
+            if preferences.useExposeBackground {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .overlay(Color.black.opacity(0.32))
+            } else {
+                Color.black.opacity(0.73)
+            }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .scaleEffect(model.isShown ? 1 : 0.97)
-        .opacity(model.isShown ? 1 : 0)
-        .animation(.easeOut(duration: 0.13), value: model.isShown)
+        .clipShape(RoundedRectangle(cornerRadius: preferences.fullscreenSwitcher ? 0 : 12, style: .continuous))
+        .scaleEffect(preferences.disableOpeningAnimation || model.isShown ? 1 : 0.97)
+        .opacity(preferences.disableOpeningAnimation || model.isShown ? 1 : 0)
+        .animation(preferences.disableOpeningAnimation ? nil : .easeOut(duration: 0.13), value: model.isShown)
     }
 
-    @ViewBuilder private var grid: some View {
+    @ViewBuilder private func grid(layout: SwitcherGridLayout) -> some View {
         if model.items.isEmpty {
             Text("No workspaces found. Is AeroSpace running?")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.7))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            LazyVGrid(columns: gridColumns, spacing: configuration.padding) {
+            LazyVGrid(columns: Array(
+                repeating: GridItem(.fixed(layout.snapshotSize.width), spacing: configuration.padding),
+                count: layout.columns
+            ), spacing: configuration.padding) {
                 ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
                     WorkspaceCard(
                         item: item,
                         isSelected: index == model.selectedIndex,
                         configuration: configuration,
+                        snapshotSize: layout.snapshotSize,
+                        showWindowTitles: preferences.showWindowTitles,
                         onActivate: {
                             model.activateWorkspace(named: item.workspace.name)
                         },
@@ -72,34 +102,10 @@ public struct SwitcherOverlayView: View {
                             model.hoverSelect(index: index)
                         }
                     )
+                    .id(index)
                 }
             }
         }
-    }
-
-    private var columnCount: Int {
-        max(1, min(preferences.gridColumns, max(1, model.items.count)))
-    }
-
-    private var contentSize: CGSize {
-        let columns = columnCount
-        let rows = max(1, Int(ceil(Double(model.items.count) / Double(columns))))
-        let rowHeight = configuration.snapshotSize.height + configuration.snapshotAppIconSize + 12 + 24
-        var chromeHeight: CGFloat = 26 + 8
-        if preferences.showOverlayHints {
-            chromeHeight += OverlayHintFooter.height
-        }
-        return CGSize(
-            width: CGFloat(columns) * configuration.snapshotSize.width + CGFloat(columns + 1) * configuration.padding,
-            height: CGFloat(rows) * rowHeight + CGFloat(rows + 1) * configuration.padding + chromeHeight
-        )
-    }
-
-    private var gridColumns: [GridItem] {
-        Array(
-            repeating: GridItem(.fixed(configuration.snapshotSize.width), spacing: configuration.padding),
-            count: columnCount
-        )
     }
 }
 
@@ -258,6 +264,8 @@ private struct WorkspaceCard: View {
     let item: WorkspacePresentation
     let isSelected: Bool
     let configuration: SwitcherConfiguration
+    let snapshotSize: CGSize
+    let showWindowTitles: Bool
     let onActivate: () -> Void
     let onHover: () -> Void
 
@@ -269,9 +277,12 @@ private struct WorkspaceCard: View {
             Text(item.workspace.name)
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(isSelected || item.workspace.isFocused ? selectedColor : Color.white)
-                .frame(width: configuration.snapshotSize.width, height: 24)
+                .frame(width: snapshotSize.width, height: 24)
+            if showWindowTitles {
+                windowTitles
+            }
         }
-        .frame(width: configuration.snapshotSize.width)
+        .frame(width: snapshotSize.width)
         .opacity(item.workspace.isEmpty && !isSelected ? 0.45 : 1)
         .contentShape(Rectangle())
         .onTapGesture(perform: onActivate)
@@ -307,7 +318,7 @@ private struct WorkspaceCard: View {
                 .stroke(isSelected ? selectedColor : Color.clear, lineWidth: 3)
                 .allowsHitTesting(false)
         }
-        .frame(width: configuration.snapshotSize.width, height: configuration.snapshotSize.height)
+        .frame(width: snapshotSize.width, height: snapshotSize.height)
     }
 
     private var appIconRow: some View {
@@ -318,7 +329,28 @@ private struct WorkspaceCard: View {
                     .frame(width: configuration.snapshotAppIconSize, height: configuration.snapshotAppIconSize)
             }
         }
-        .frame(width: configuration.snapshotSize.width)
+        .frame(width: snapshotSize.width)
+    }
+
+    private var windowTitles: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(item.workspace.windows, id: \.id) { window in
+                    let label = window.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? window.appName : "\(window.appName) — \(window.title)"
+                    Text(label)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.white.opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(label)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 6)
+        }
+        .frame(height: SwitcherGridLayout.titleHeight)
     }
 
     private var selectedColor: Color {

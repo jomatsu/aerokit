@@ -24,6 +24,8 @@ struct SwitcherSettingsView: View {
                 gridColumnsRow
             }
 
+            appearanceSection
+
             SettingsSection("Workspace Order") {
                 workspaceOrderRow
             }
@@ -60,6 +62,32 @@ struct SwitcherSettingsView: View {
         }
         .onAppear {
             model.refreshStatus()
+        }
+    }
+
+    private var appearanceSection: some View {
+        SettingsSection("Appearance") {
+            SettingsRow(title: "Fullscreen Switcher", subtitle: "Fill the display and enlarge workspace previews") {
+                SettingsToggle(isOn: $preferences.fullscreenSwitcher)
+            }
+            SettingsDivider()
+            SettingsRow(
+                title: "Window Titles",
+                subtitle: "Show a scrollable list of window titles below each preview"
+            ) {
+                SettingsToggle(isOn: $preferences.showWindowTitles)
+            }
+            SettingsDivider()
+            SettingsRow(
+                title: "Disable Opening Animation",
+                subtitle: "Show the switcher immediately without zoom or fade"
+            ) {
+                SettingsToggle(isOn: $preferences.disableOpeningAnimation)
+            }
+            SettingsDivider()
+            SettingsRow(title: "Exposé Background", subtitle: "Use the same frosted blur and dark tint as Exposé") {
+                SettingsToggle(isOn: $preferences.useExposeBackground)
+            }
         }
     }
 

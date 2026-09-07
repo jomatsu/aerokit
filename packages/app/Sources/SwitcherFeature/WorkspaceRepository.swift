@@ -23,7 +23,8 @@ public final class WorkspaceRepository: Sendable {
                     name: listing.name,
                     apps: WorkspaceApp.uniqueApps(from: workspaceWindows),
                     isFocused: listing.isFocused,
-                    isEmpty: workspaceWindows.isEmpty
+                    isEmpty: workspaceWindows.isEmpty,
+                    windows: workspaceWindows
                 )
             }
             .sorted { lhs, rhs in

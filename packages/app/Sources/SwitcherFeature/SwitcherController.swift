@@ -58,7 +58,10 @@ public final class SwitcherController {
         repository = WorkspaceRepository(client: client)
         snapshotStore = SnapshotStore(
             rootPath: configuration.snapshotRootPath,
-            maxThumbnailPixelSize: max(configuration.snapshotSize.width, configuration.snapshotSize.height) * 2
+            maxThumbnailPixelSize: max(
+                configuration.snapshotComposeSize.width,
+                configuration.snapshotComposeSize.height
+            )
         )
         snapshotScheduler = SnapshotRefreshScheduler(
             configuration: configuration,
