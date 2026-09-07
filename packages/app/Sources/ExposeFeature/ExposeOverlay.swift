@@ -178,7 +178,7 @@ final class ExposeOverlay {
         // Caps Lock rides along in the flags and must not break matching.
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
         if flags.contains(.command) {
-            if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "w" {
+            if CommandKeyEquivalent.matches(event, character: "w") {
                 onCloseSelected?()
             }
             // Swallow every ⌘ combo so ⌘+letter never falls into quick

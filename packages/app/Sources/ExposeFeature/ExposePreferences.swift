@@ -8,20 +8,17 @@ import Foundation
 public final class ExposePreferences: ObservableObject {
     public static let defaultHotKey = HotKeySpec(
         keyCode: UInt16(kVK_ANSI_M),
-        modifierRawValue: NSEvent.ModifierFlags.option.rawValue,
-        keyLabel: "M"
+        modifierRawValue: NSEvent.ModifierFlags.option.rawValue
     )
 
     public static let defaultAppHotKey = HotKeySpec(
         keyCode: UInt16(kVK_ANSI_A),
-        modifierRawValue: NSEvent.ModifierFlags.option.rawValue,
-        keyLabel: "A"
+        modifierRawValue: NSEvent.ModifierFlags.option.rawValue
     )
 
     public static let defaultWindowSwitchHotKey = HotKeySpec(
         keyCode: UInt16(kVK_Tab),
-        modifierRawValue: NSEvent.ModifierFlags.option.rawValue,
-        keyLabel: "\u{21e5}"
+        modifierRawValue: NSEvent.ModifierFlags.option.rawValue
     )
 
     @Published public var hotKey: HotKeySpec {

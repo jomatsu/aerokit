@@ -58,8 +58,11 @@ Natural direction (content follows the fingers), wrap-around, skipping
 empty workspaces, and the strip itself are all configurable. Three-finger
 swipes up/down still belong to Exposé.
 
-All hotkeys are configurable from the settings window (menu bar icon →
-Settings).
+Global shortcuts are configurable from the settings window (menu bar icon →
+Settings). Recorded shortcuts bind to physical key positions and display labels
+derived from the most recent ASCII-capable keyboard layout, preserving bindings
+across input source changes. In Exposé, ⌘W follows the keyboard layout's Command
+mapping at the time of the keypress, including Dvorak and Dvorak–QWERTY ⌘.
 
 ## Privacy
 

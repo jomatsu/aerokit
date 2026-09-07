@@ -9,30 +9,25 @@ import Foundation
 public struct HotKeySpec: Codable, Equatable, Sendable {
     public var keyCode: UInt16
     public var modifierRawValue: UInt
-    public var keyLabel: String
 
     public static let `default` = HotKeySpec(
         keyCode: UInt16(kVK_ANSI_Grave),
-        modifierRawValue: NSEvent.ModifierFlags.option.rawValue,
-        keyLabel: "`"
+        modifierRawValue: NSEvent.ModifierFlags.option.rawValue
     )
 
     public static let defaultRefresh = HotKeySpec(
         keyCode: UInt16(kVK_ANSI_R),
-        modifierRawValue: NSEvent.ModifierFlags.command.rawValue,
-        keyLabel: "R"
+        modifierRawValue: NSEvent.ModifierFlags.command.rawValue
     )
 
     public static let defaultSettings = HotKeySpec(
         keyCode: UInt16(kVK_ANSI_Comma),
-        modifierRawValue: NSEvent.ModifierFlags.command.rawValue,
-        keyLabel: ","
+        modifierRawValue: NSEvent.ModifierFlags.command.rawValue
     )
 
-    public init(keyCode: UInt16, modifierRawValue: UInt, keyLabel: String) {
+    public init(keyCode: UInt16, modifierRawValue: UInt) {
         self.keyCode = keyCode
         self.modifierRawValue = modifierRawValue
-        self.keyLabel = keyLabel
     }
 
     public var modifierFlags: NSEvent.ModifierFlags {
@@ -71,8 +66,14 @@ public struct HotKeySpec: Codable, Equatable, Sendable {
         return result
     }
 
-    /// Keycap strings for display, e.g. ["⌥", "`"].
-    public var displayKeys: [String] {
+    /// Keycap strings, evaluated using the last-used ASCII-capable layout.
+    /// Only the code and modifiers persist; legacy JSON's keyLabel is ignored.
+    @MainActor public var displayKeys: [String] {
+        displayKeys(inputSource: ASCIIKeyboardLayout.currentInputSource)
+    }
+
+    @MainActor
+    func displayKeys(inputSource: TISInputSource?) -> [String] {
         var keys: [String] = []
         let flags = modifierFlags
         if flags.contains(.control) {
@@ -84,12 +85,12 @@ public struct HotKeySpec: Codable, Equatable, Sendable {
         if flags.contains(.command) {
             keys.append("⌘")
         }
-        keys.append(keyLabel)
+        keys.append(keyLabel(inputSource: inputSource))
         return keys
     }
 
     /// Settings-pane message when RegisterEventHotKey rejects the combination.
-    public var registrationFailureMessage: String {
+    @MainActor public var registrationFailureMessage: String {
         "Could not register \(displayKeys.joined()) as the global hotkey. "
             + "Another app may already use it — record a different shortcut above."
     }
@@ -130,12 +131,12 @@ public struct HotKeySpec: Codable, Equatable, Sendable {
         }
         return HotKeySpec(
             keyCode: event.keyCode,
-            modifierRawValue: flags.rawValue,
-            keyLabel: keyLabel(for: event)
+            modifierRawValue: flags.rawValue
         )
     }
 
-    private static func keyLabel(for event: NSEvent) -> String {
+    @MainActor
+    private func keyLabel(inputSource: TISInputSource?) -> String {
         let specialLabels: [UInt16: String] = [
             UInt16(kVK_Space): "Space",
             UInt16(kVK_Return): "↩",
@@ -144,16 +145,26 @@ public struct HotKeySpec: Codable, Equatable, Sendable {
             UInt16(kVK_LeftArrow): "←",
             UInt16(kVK_RightArrow): "→",
             UInt16(kVK_UpArrow): "↑",
-            UInt16(kVK_DownArrow): "↓"
+            UInt16(kVK_DownArrow): "↓",
+            UInt16(kVK_ANSI_KeypadEnter): "⌤",
+            UInt16(kVK_ForwardDelete): "⌦",
+            UInt16(kVK_Escape): "⎋",
+            UInt16(kVK_Home): "↖",
+            UInt16(kVK_End): "↘",
+            UInt16(kVK_PageUp): "⇞",
+            UInt16(kVK_PageDown): "⇟",
+            UInt16(kVK_Help): "?⃝"
         ]
-        if let label = specialLabels[event.keyCode] {
+        if let label = specialLabels[keyCode] {
             return label
         }
-
-        let characters = event.charactersIgnoringModifiers ?? ""
-        guard let character = characters.first, !character.isWhitespace else {
-            return "?"
+        let functionKeys = [
+            kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10,
+            kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20
+        ]
+        if let index = functionKeys.firstIndex(of: Int(keyCode)) {
+            return "F\(index + 1)"
         }
-        return String(character).uppercased()
+        return ASCIIKeyboardLayout.character(for: keyCode, inputSource: inputSource)?.uppercased() ?? "?"
     }
 }
