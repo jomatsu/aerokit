@@ -63,6 +63,13 @@ public enum KeyCode {
     public static let tab: UInt16 = 48
     public static let space: UInt16 = 49
     public static let escape: UInt16 = 53
+
+    /// Escape alone cancels; modifier chords remain available as shortcuts.
+    /// Caps Lock and device flags must not change this distinction.
+    public static func isBareEscape(_ event: NSEvent) -> Bool {
+        event.keyCode == escape && event.modifierFlags.isDisjoint(with: [.command, .option, .control, .shift])
+    }
+
     public static let keypadEnter: UInt16 = 76
     public static let leftArrow: UInt16 = 123
     public static let rightArrow: UInt16 = 124

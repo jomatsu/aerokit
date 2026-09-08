@@ -152,8 +152,15 @@ public final class SwiftUIOverlay: ObservableObject {
         return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main
     }
 
-    private func handleKey(_ event: NSEvent) -> Bool {
+    func handleKey(_ event: NSEvent) -> Bool {
         dismissor?.noteKeyEvent(event)
+
+        // When Escape is the configured trigger, its bare form must still
+        // cancel rather than fall through to the trigger-key cycling case.
+        if KeyCode.isBareEscape(event) {
+            onCancel?()
+            return true
+        }
 
         // Extra modifiers are tolerated by matches(_:) because the trigger
         // modifier is typically still held while the switcher is open.
@@ -183,12 +190,16 @@ public final class SwiftUIOverlay: ObservableObject {
         let isShifted = event.modifierFlags.contains(.shift)
 
         switch event.keyCode {
+        case KeyCode.escape:
+            if preferences.hotKey.matches(event) {
+                onMove?(isShifted ? .previous : .next)
+            } else {
+                onCancel?()
+            }
         case preferences.hotKey.keyCode, KeyCode.tab:
             onMove?(isShifted ? .previous : .next)
         case KeyCode.return, KeyCode.keypadEnter:
             onSelect?()
-        case KeyCode.escape:
-            onCancel?()
         case KeyCode.leftArrow:
             onMove?(.left)
         case KeyCode.rightArrow:

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Shared chrome and capture lifecycle for the settings key recorders: a
 /// keycap button that pulses while recording and feeds key-downs to the
-/// caller. Escape cancels; a rejected key beeps and recording continues.
+/// caller. Bare Escape cancels; a rejected key beeps and recording continues.
 public struct KeyRecorderButton: View {
     let keys: [String]
     let prompt: String
@@ -84,7 +84,7 @@ public struct KeyRecorderButton: View {
         isRecording = true
         onRecordingChanged(true)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.keyCode == KeyCode.escape {
+            if KeyCode.isBareEscape(event) {
                 stopRecording()
             } else if record(event) {
                 stopRecording()
