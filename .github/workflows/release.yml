@@ -195,10 +195,14 @@ jobs:
               --clobber \
               --repo "$GITHUB_REPOSITORY"
           else
+            notes=(--generate-notes)
+            if [[ -f "docs/releases/$GITHUB_REF_NAME.md" ]]; then
+              notes=(--notes-file "docs/releases/$GITHUB_REF_NAME.md")
+            fi
             gh release create "$GITHUB_REF_NAME" \
               "$ARCHIVE" \
               "$CHECKSUM" \
-              --generate-notes \
+              "${notes[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --title "$APP_NAME $VERSION" \
               --verify-tag
