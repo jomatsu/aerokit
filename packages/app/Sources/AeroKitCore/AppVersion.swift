@@ -2,5 +2,5 @@
 /// it directly, and scripts/install-app.sh greps it into the bundle's
 /// Info.plist so the binary and the bundle can never disagree.
 public enum AppVersion {
-    public static let current = "0.2.4"
+    public static let current = "0.2.5"
 }
