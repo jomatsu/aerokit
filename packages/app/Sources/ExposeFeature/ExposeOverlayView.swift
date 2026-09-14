@@ -384,7 +384,7 @@ struct ExposeOverlayView: View {
                     content:
                     HStack(spacing: TileMetrics.gap) {
                         ForEach(slots(in: row)) { slot in
-                            tileView(at: slot.index, cell: cell)
+                            tileView(slot, cell: cell)
                         }
                     }
                 )
@@ -478,7 +478,7 @@ struct ExposeOverlayView: View {
             ForEach(session.rowRanges(in: range), id: \.lowerBound) { row in
                 HStack(spacing: gap) {
                     ForEach(slots(in: row)) { slot in
-                        tileView(at: slot.index, cell: cell)
+                        tileView(slot, cell: cell)
                     }
                 }
             }
@@ -487,28 +487,31 @@ struct ExposeOverlayView: View {
 
     /// A row's tiles identified by window id, not position, so a removal
     /// re-flows the survivors instead of rewriting every tile in place.
+    /// The tile itself rides along by value: SwiftUI rebuilds a removed
+    /// child from the previous body's slot, and re-reading the live session
+    /// there would subscript a collection that has already shrunk.
     private func slots(in row: some Sequence<Int>) -> [TileSlot] {
         row.compactMap { index in
             session.tiles.indices.contains(index)
-                ? TileSlot(index: index, id: session.tiles[index].id)
+                ? TileSlot(index: index, tile: session.tiles[index])
                 : nil
         }
     }
 
-    private func tileView(at index: Int, cell: CGSize) -> some View {
-        let tile = session.tiles[index]
+    private func tileView(_ slot: TileSlot, cell: CGSize) -> some View {
+        let tile = slot.tile
         return WindowTile(
             tile: tile,
-            shortcut: QuickSelect.label(forIndex: index, excluding: quickSelectExclusion),
-            isSelected: index == session.selectedIndex,
+            shortcut: QuickSelect.label(forIndex: slot.index, excluding: quickSelectExclusion),
+            isSelected: slot.index == session.selectedIndex,
             cell: cell,
             showsLabelIcon: !session.isGroupedByApp,
-            onActivate: { onActivate(index) },
+            onActivate: { onActivate(slot.index) },
             // The cursor sweeping the grid mid-drag must not fight the
             // selection ring.
             onHover: {
                 if drag == nil {
-                    onHover(index)
+                    onHover(slot.index)
                 }
             },
             onDragChanged: { value in dragChanged(value, id: tile.id) },
@@ -526,11 +529,17 @@ struct ExposeOverlayView: View {
     }
 }
 
-/// A tile's place in a row: `index` addresses the session, `id` is the
-/// window — the stable identity SwiftUI animates re-flows by.
+/// A tile's place in a row: `index` addresses the session for selection and
+/// quick-select labels, `tile` is the row's data carried by value so the
+/// body pass that rebuilds a removed child never touches the live session,
+/// and `id` is the stable identity SwiftUI animates re-flows by.
 private struct TileSlot: Identifiable {
     let index: Int
-    let id: CGWindowID
+    let tile: ExposeSession.Tile
+
+    var id: CGWindowID {
+        tile.id
+    }
 }
 
 /// In-flight tile drag state.
