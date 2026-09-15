@@ -173,14 +173,32 @@ jobs:
         run: |
           set -euo pipefail
           dist_dir="$GITHUB_WORKSPACE/dist"
-          archive="$dist_dir/$APP_NAME-$VERSION.zip"
-          checksum="$archive.sha256"
           mkdir -p "$dist_dir"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$archive"
-          sha256="$(shasum -a 256 "$archive" | awk '{print $1}')"
-          printf '%s  %s\n' "$sha256" "$(basename "$archive")" > "$checksum"
-          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
-          echo "CHECKSUM=$checksum" >> "$GITHUB_ENV"
+
+          zip_archive="$dist_dir/$APP_NAME-$VERSION.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$zip_archive"
+          zip_sha256="$(shasum -a 256 "$zip_archive" | awk '{print $1}')"
+          printf '%s  %s\n' "$zip_sha256" "$(basename "$zip_archive")" > "$zip_archive.sha256"
+
+          # Manual downloads get a drag-to-Applications disk image: an app
+          # run straight from ~/Downloads is translocated to a random path
+          # on every launch, which silently unsets Accessibility grants.
+          dmg_staging="$RUNNER_TEMP/dmg-staging"
+          mkdir -p "$dmg_staging"
+          ditto "$APP_PATH" "$dmg_staging/$APP_NAME.app"
+          ln -s /Applications "$dmg_staging/Applications"
+          dmg_archive="$dist_dir/$APP_NAME-$VERSION.dmg"
+          hdiutil create -volname "$APP_NAME $VERSION" \
+            -srcfolder "$dmg_staging" -ov -format UDZO "$dmg_archive"
+          dmg_sha256="$(shasum -a 256 "$dmg_archive" | awk '{print $1}')"
+          printf '%s  %s\n' "$dmg_sha256" "$(basename "$dmg_archive")" > "$dmg_archive.sha256"
+
+          {
+            echo "ZIP_ARCHIVE=$zip_archive"
+            echo "ZIP_CHECKSUM=$zip_archive.sha256"
+            echo "DMG_ARCHIVE=$dmg_archive"
+            echo "DMG_CHECKSUM=$dmg_archive.sha256"
+          } >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
         shell: bash
@@ -190,8 +208,8 @@ jobs:
           set -euo pipefail
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" \
-              "$ARCHIVE" \
-              "$CHECKSUM" \
+              "$ZIP_ARCHIVE" "$ZIP_CHECKSUM" \
+              "$DMG_ARCHIVE" "$DMG_CHECKSUM" \
               --clobber \
               --repo "$GITHUB_REPOSITORY"
           else
@@ -200,8 +218,8 @@ jobs:
               notes=(--notes-file "docs/releases/$GITHUB_REF_NAME.md")
             fi
             gh release create "$GITHUB_REF_NAME" \
-              "$ARCHIVE" \
-              "$CHECKSUM" \
+              "$ZIP_ARCHIVE" "$ZIP_CHECKSUM" \
+              "$DMG_ARCHIVE" "$DMG_CHECKSUM" \
               "${notes[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --title "$APP_NAME $VERSION" \
