@@ -66,6 +66,8 @@ public final class SwiftUIOverlay: ObservableObject {
         self.dismissor = dismissor
         mouseLocationAtShow = NSEvent.mouseLocation
 
+        // With animation disabled, render the first frame fully visible.
+        isShown = preferences.disableOpeningAnimation
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         dismissor.beginSession()
@@ -83,10 +85,11 @@ public final class SwiftUIOverlay: ObservableObject {
 
         // Flip the flag on the next runloop tick so the entrance transition
         // animates instead of landing in the already-shown state.
-        isShown = false
-        DispatchQueue.main.async { [weak self] in
-            guard let self, panel.isVisible else { return }
-            isShown = true
+        if !preferences.disableOpeningAnimation {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, panel.isVisible else { return }
+                isShown = true
+            }
         }
     }
 

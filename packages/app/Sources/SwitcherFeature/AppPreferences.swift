@@ -91,6 +91,22 @@ public final class AppPreferences: ObservableObject {
         didSet { defaults.set(showOverlayHints, forKey: Keys.showOverlayHints) }
     }
 
+    @Published public var fullscreenSwitcher: Bool {
+        didSet { defaults.set(fullscreenSwitcher, forKey: Keys.fullscreenSwitcher) }
+    }
+
+    @Published public var showWindowTitles: Bool {
+        didSet { defaults.set(showWindowTitles, forKey: Keys.showWindowTitles) }
+    }
+
+    @Published public var disableOpeningAnimation: Bool {
+        didSet { defaults.set(disableOpeningAnimation, forKey: Keys.disableOpeningAnimation) }
+    }
+
+    @Published public var useExposeBackground: Bool {
+        didSet { defaults.set(useExposeBackground, forKey: Keys.useExposeBackground) }
+    }
+
     @Published public var hotKey: HotKeySpec {
         didSet { hotKey.store(in: defaults, key: Keys.hotKey) }
     }
@@ -114,6 +130,10 @@ public final class AppPreferences: ObservableObject {
         static let hideEmptyWorkspaces = "switcher.hideEmptyWorkspaces"
         static let gridColumns = "switcher.gridColumns"
         static let showOverlayHints = "switcher.showOverlayHints"
+        static let fullscreenSwitcher = "switcher.fullscreen"
+        static let showWindowTitles = "switcher.showWindowTitles"
+        static let disableOpeningAnimation = "switcher.disableOpeningAnimation"
+        static let useExposeBackground = "switcher.useExposeBackground"
         static let hotKey = "switcher.hotKey"
         static let refreshShortcut = "switcher.refreshShortcut"
         static let settingsShortcut = "switcher.settingsShortcut"
@@ -140,6 +160,10 @@ public final class AppPreferences: ObservableObject {
         let storedColumns = defaults.integer(forKey: Keys.gridColumns)
         gridColumns = (2 ... 6).contains(storedColumns) ? storedColumns : 4
         showOverlayHints = defaults.object(forKey: Keys.showOverlayHints) as? Bool ?? true
+        fullscreenSwitcher = defaults.bool(forKey: Keys.fullscreenSwitcher)
+        showWindowTitles = defaults.bool(forKey: Keys.showWindowTitles)
+        disableOpeningAnimation = defaults.bool(forKey: Keys.disableOpeningAnimation)
+        useExposeBackground = defaults.bool(forKey: Keys.useExposeBackground)
         hotKey = HotKeySpec.load(from: defaults, key: Keys.hotKey) ?? .default
         refreshShortcut = HotKeySpec.load(from: defaults, key: Keys.refreshShortcut) ?? .defaultRefresh
         settingsShortcut = HotKeySpec.load(from: defaults, key: Keys.settingsShortcut) ?? .defaultSettings

@@ -44,4 +44,24 @@ final class AppPreferencesTests: XCTestCase {
         preferences.snapshotExcludedApps = ""
         XCTAssertEqual(preferences.snapshotExclusions, [])
     }
+
+    func testAppearanceOptionsDefaultToExistingBehaviorAndPersistIndependently() {
+        let preferences = AppPreferences(defaults: defaults)
+        XCTAssertFalse(preferences.fullscreenSwitcher)
+        XCTAssertFalse(preferences.showWindowTitles)
+        XCTAssertFalse(preferences.disableOpeningAnimation)
+        XCTAssertFalse(preferences.useExposeBackground)
+
+        preferences.fullscreenSwitcher = true
+        preferences.showWindowTitles = true
+        preferences.disableOpeningAnimation = true
+        preferences.useExposeBackground = true
+        preferences.fullscreenSwitcher = false
+
+        let restored = AppPreferences(defaults: defaults)
+        XCTAssertFalse(restored.fullscreenSwitcher)
+        XCTAssertTrue(restored.showWindowTitles)
+        XCTAssertTrue(restored.disableOpeningAnimation)
+        XCTAssertTrue(restored.useExposeBackground)
+    }
 }

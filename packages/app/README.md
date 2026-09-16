@@ -22,6 +22,18 @@ Cmd-Tab-style workspace switcher with snapshot previews. Hold the modifier
 and tap the key to cycle; release to switch. Snapshots refresh in the
 background and on demand.
 
+Settings → Switcher → Appearance provides four independent options (off by default):
+
+- **Fullscreen Switcher** fills the active display and sizes previews to the available space.
+- **Window Titles** adds app names and current window titles below each workspace. Long lists scroll;
+  hover over a truncated title to read it in full. Titles refresh when the switcher opens,
+  independently of cached screenshots.
+- **Disable Opening Animation** removes the switcher's entrance zoom and fade.
+- **Exposé Background** uses the same frosted material and dark tint as Exposé.
+
+Grid Layout still controls the number of columns in fullscreen mode. Large workspace collections
+scroll, and keyboard navigation keeps the selected workspace visible.
+
 ### Exposé (default <kbd>⌥M</kbd>)
 
 ![Exposé](../../docs/images/aerokit-expose.gif)
