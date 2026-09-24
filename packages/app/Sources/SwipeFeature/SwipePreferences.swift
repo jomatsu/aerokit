@@ -38,6 +38,18 @@ public final class SwipePreferences: ObservableObject {
     public static let stepDistanceRange: ClosedRange<Double> = 20 ... 80
     public static let defaultStepDistanceMM = Double(TrackpadSwipeMonitor.defaultStepDistanceMM)
 
+    public func resetTrackpadSettings() {
+        isEnabled = true
+        naturalDirection = true
+        wrapAround = true
+        skipEmpty = true
+        stepDistanceMM = Self.defaultStepDistanceMM
+    }
+
+    public func resetDisplaySettings() {
+        showHUD = true
+    }
+
     private let defaults: UserDefaults
 
     private enum Keys {

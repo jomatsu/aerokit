@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/app-metadata.sh"
 # Dev installs use their own bundle identifier and app name so Screen
-# Recording / Accessibility grants, the login item, LaunchServices, and
+# Recording grants, the login item, LaunchServices, and
 # the System Settings entries stay separate and recognizable next to the
 # Homebrew/release app at /Applications.
 export AEROKIT_BUNDLE_ID="${AEROKIT_BUNDLE_ID:-$DEV_BUNDLE_ID}"
@@ -48,6 +48,18 @@ done
 # any pre-rename dev copy.
 for RUNNING_NAME in "$APP_NAME" AeroKit; do
   /usr/bin/pkill -x "$RUNNING_NAME" >/dev/null 2>&1 || true
+  # SIGTERM drains pending screen captures. Keep the old executable in place
+  # until its process exits so replayd can still resolve the capture client.
+  for ((ATTEMPT = 0; ATTEMPT < 100; ATTEMPT++)); do
+    if ! /usr/bin/pgrep -x "$RUNNING_NAME" >/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if /usr/bin/pgrep -x "$RUNNING_NAME" >/dev/null; then
+    echo "$RUNNING_NAME is still finishing screen capture. Try installing again after it exits." >&2
+    exit 1
+  fi
 done
 if [[ "$APP_NAME" != "AeroKit" ]]; then
   rm -rf "$INSTALL_DIR/AeroKit.app"

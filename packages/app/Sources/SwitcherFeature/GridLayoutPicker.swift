@@ -1,3 +1,4 @@
+import AeroKitCore
 import SwiftUI
 
 /// Layout selector in the style of Raycast's window-mode picker: each option
@@ -37,14 +38,17 @@ struct GridLayoutPicker: View {
                             )
                     }
 
-                Text("\(columns)")
+                Text(L10n.tr("\(columns)"))
                     .font(.system(size: 10.5, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("\(columns) columns")
+        .help(L10n.tr("\(columns) workspaces per row"))
+        .accessibilityLabel(L10n.tr("\(columns) workspaces per row"))
+        .accessibilityValue(isSelected ? L10n.tr("Selected") : L10n.tr("Not selected"))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .animation(.easeOut(duration: 0.12), value: selection)
     }
 }

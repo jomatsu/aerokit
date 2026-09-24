@@ -12,6 +12,12 @@ Recording grant covers every feature.
 - **Screen Recording** permission for window previews (everything else works
   without it)
 
+Keyboard navigation uses registered shortcuts and the active overlay's key events;
+AeroKit does not request Accessibility permission. In the window overview, use
+plain number or letter keys to select a window. Option-number bindings remain
+with AeroSpace. Window cycling detects modifier release locally and checks the
+current modifier state while the switcher is open.
+
 ## Features
 
 ### Switcher (default <kbd>⌥`</kbd>)
@@ -64,6 +70,34 @@ derived from the most recent ASCII-capable keyboard layout, preserving bindings
 across input source changes. In Exposé, ⌘W follows the keyboard layout's Command
 mapping at the time of the keypress, including Dvorak and Dvorak–QWERTY ⌘.
 
+## Settings
+
+Settings are grouped into four feature pages:
+
+- **General:** language picker, launch at login, AeroSpace status, Screen
+  Recording permission, and a link to replay the welcome tour.
+- **Workspaces:** workspace grid, three-finger horizontal swipe, workspace name
+  strip, and the shared workspace order. The setup sheet for AeroSpace switch
+  hooks lives here too.
+- **Windows:** window overview and App Exposé shortcuts, vertical three-finger
+  gestures, and experimental quick window switching.
+- **Preview Images:** excluded apps from a searchable installed app list, manual
+  update settings that keep existing previews, and an explicit Delete Previews
+  button.
+
+The language picker under General includes English, Japanese, Simplified
+Chinese, Korean, Spanish, French, and German, switching immediately. System
+default follows the Mac's preferred supported language. Workspace names, app
+names, keys, and config commands remain untranslated.
+
+Each page remembers its scroll position, and the Reset button only resets that
+page. Each section also includes an (i) button that plays a looping drawn
+animation using your own shortcuts and settings. The Try buttons let you test
+features directly: the workspace grid stays open to look around, and the App
+Exposé Try shows the app you were using before you opened settings. Changing the
+Mission Control or App Exposé gestures asks for confirmation because the Dock
+restarts.
+
 ## Privacy
 
 Snapshots are screenshots of your windows plus a manifest listing their
@@ -73,12 +107,13 @@ are moved there automatically from `~/Pictures/AeroSpace Workspaces`).
 Nothing ever leaves the machine.
 
 To keep sensitive apps out of snapshots — password managers, banking — list
-them under Settings → Switcher → Exclude Apps (app names or bundle IDs,
-comma-separated). Excluded windows are never captured or listed in the
+them under Settings → Preview Images → Choose Apps. Search installed apps or add an
+app name or bundle ID manually. Excluded windows are never captured or listed in the
 manifest.
 
-Turning off automatic refresh in Settings stops all captures **and deletes
-the stored previews**; the manual refresh button recreates them on demand.
+Choosing “I’ll update them” under Settings → Preview Images stops automatic captures and keeps
+saved previews. Update Now takes new screenshots on demand. Delete Previews explicitly
+removes saved images and titles and turns off automatic updates.
 `scripts/uninstall-app.sh --purge` removes them together with the app.
 
 ## Install

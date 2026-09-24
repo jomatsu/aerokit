@@ -2,64 +2,38 @@ import AeroKitCore
 import AppKit
 import SwiftUI
 
-/// The window switcher's settings section, embedded in the Exposé pane:
-/// ships off; enabling reveals the hotkey recorder and the two setup
-/// warnings (AeroSpace's own alt-tab binding, Accessibility for the
-/// global tap).
+/// Experimental hold-to-cycle switching. The shortcut is the switch:
+/// setting one turns the feature on, clearing it turns it off.
 struct WindowSwitcherSettingsView: View {
     @ObservedObject var model: WindowSwitcherSettingsModel
     @ObservedObject var preferences: ExposePreferences
 
-    @State private var accessibilityGranted = AccessibilityPermission.isGranted
+    private var heldKeys: String {
+        preferences.windowSwitchHotKey?.displayKeys.dropLast().joined(separator: " + ") ?? ""
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            SettingsSection("Window Switcher (Experimental)") {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsSection(L10n.tr("Quick window switching (Experimental)")) {
                 SettingsRow(
-                    title: "Enable window cycling",
-                    subtitle: "Cycle the focused workspace's windows; release to commit"
+                    title: L10n.tr("Switch to the next window"),
+                    subtitle: preferences.windowSwitchHotKey == nil
+                        ? L10n.tr("Choose a shortcut to enable window switching.")
+                        : L10n.tr("Release \(heldKeys) to select. Add ⇧ to go back; Esc cancels.")
                 ) {
-                    SettingsToggle(isOn: $preferences.windowSwitchEnabled)
+                    HotKeyRecorder(
+                        spec: $preferences.windowSwitchHotKey,
+                        clearable: true
+                    ) { model.setHotKeyRecording($0) }
                 }
-                SettingsDivider()
-                SettingsRow(
-                    title: "Window switcher hotkey",
-                    subtitle: "Tap to advance · ⇧ reverses · release commits · Esc cancels"
-                ) {
-                    HotKeyRecorder(spec: $preferences.windowSwitchHotKey) { isRecording in
-                        model.setHotKeyRecording(isRecording)
-                    }
+            } accessory: {
+                FeatureInfoButton(L10n.tr("Quick window switching (Experimental)")) {
+                    QuickWindowSwitchDemo(shortcut: preferences.windowSwitchHotKey?.displayKeys ?? [])
                 }
-                .disabled(!preferences.windowSwitchEnabled)
             }
-
             if let message = model.hotKeyErrorMessage {
-                SettingsErrorBanner(message)
+                SettingsErrorBanner(L10n.tr(message))
             }
-
-            if preferences.windowSwitchEnabled {
-                if !accessibilityGranted {
-                    SettingsErrorBanner(
-                        "Without Accessibility access the strip falls back to panel keys and can miss "
-                            + "releases when another window keeps focus.",
-                        icon: "hand.raised.fill",
-                        actionTitle: "Grant\u{2026}"
-                    ) {
-                        AccessibilityPermission.request()
-                    }
-                }
-                SettingsErrorBanner(
-                    "AeroSpace's default config binds alt-tab. If the hotkey above conflicts, change it "
-                        + "here or in ~/.aerospace.toml.",
-                    icon: "exclamationmark.triangle"
-                )
-            }
-        }
-        .onAppear {
-            accessibilityGranted = AccessibilityPermission.isGranted
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            accessibilityGranted = AccessibilityPermission.isGranted
         }
     }
 }

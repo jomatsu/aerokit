@@ -21,6 +21,16 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         coordinator = nil
     }
 
+    func testAlreadyQueuedTimerCannotCaptureAfterDeletionCompletes() throws {
+        coordinator.startObserving()
+        XCTAssertTrue(fixture.scheduler.schedule(reason: .workspaceChange))
+        let queued = try XCTUnwrap(fixture.timers.takeNextCallback())
+        coordinator.deleteSnapshots()
+        queued()
+        XCTAssertFalse(fixture.scheduler.isRefreshing)
+        XCTAssertEqual(events, ["invalidate", "purged"])
+    }
+
     func testObservationDoesNotPurgeUntilStarted() throws {
         try fixture.plantMarker()
         fixture.preferences.autoRefresh = false
@@ -31,7 +41,7 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         XCTAssertTrue(fixture.markerExists())
     }
 
-    func testTurningAutoRefreshOffCancelsPendingThenPurgesRoot() throws {
+    func testTurningAutoRefreshOffCancelsPendingAndKeepsRoot() throws {
         try fixture.plantMarker()
         coordinator.startObserving()
         XCTAssertTrue(fixture.scheduler.schedule(reason: .workspaceChange))
@@ -40,13 +50,13 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         fixture.preferences.autoRefresh = false
 
         XCTAssertEqual(fixture.timers.count, 0)
-        XCTAssertEqual(events, ["invalidate", "purged"])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.path))
+        XCTAssertEqual(events, [])
+        XCTAssertTrue(fixture.markerExists())
         fixture.timers.fireNext()
         XCTAssertEqual(fixture.refresh.startedCount, 0)
     }
 
-    func testOffTransitionCancelsTimersBeforeHeldPurgeCompletes() async throws {
+    func testExplicitDeletionSuspendsCaptureUntilHeldPurgeCompletes() async throws {
         let purge = HeldPurgeWork()
         let held = expectation(description: "purge held")
         let completed = expectation(description: "purge completed")
@@ -59,7 +69,7 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         }
         coordinator = makeCoordinator(runWork: runWork)
         wireCoordinator()
-        coordinator.onPurgeCompleted = { [weak self] in
+        coordinator.onPurgeCompleted = { [weak self] _ in
             self?.events.append("purged")
             completed.fulfill()
         }
@@ -67,7 +77,9 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         try fixture.plantMarker()
         coordinator.startObserving()
         XCTAssertTrue(fixture.scheduler.schedule(reason: .workspaceChange))
-        fixture.preferences.autoRefresh = false
+        coordinator.deleteSnapshots()
+        coordinator.deleteSnapshots()
+        XCTAssertFalse(fixture.scheduler.refreshNow())
 
         await fulfillment(of: [held], timeout: 1)
         XCTAssertEqual(fixture.timers.count, 0)
@@ -78,37 +90,25 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         await fulfillment(of: [completed], timeout: 1)
         XCTAssertEqual(events, ["invalidate", "purged"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.path))
+        XCTAssertTrue(fixture.scheduler.refreshNow())
+        fixture.scheduler.cancelPending()
     }
 
-    func testInFlightAutomaticCompletionPurgesRecreatedRoot() async throws {
+    func testInFlightCompletionKeepsPreviewsWhenAutomaticUpdatesStop() async throws {
         try fixture.plantMarker()
         coordinator.startObserving()
         let started = fixture.expectRefreshStarted()
         XCTAssertTrue(fixture.scheduler.schedule(reason: .workspaceChange))
         fixture.timers.fireNext()
         await fulfillment(of: [started], timeout: 1)
-
         fixture.preferences.autoRefresh = false
-        XCTAssertEqual(events, ["started", "invalidate", "purged"])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.path))
-
-        try fixture.plantMarker()
-        XCTAssertTrue(fixture.markerExists())
-
+        XCTAssertEqual(events, ["started"])
         let finished = expectation(description: "finished")
-        let secondPurge = expectation(description: "second purge")
-        coordinator.onFinished = { [weak self] in
-            self?.events.append("finished")
-            finished.fulfill()
-        }
-        coordinator.onPurgeCompleted = { [weak self] in
-            self?.events.append("purged")
-            secondPurge.fulfill()
-        }
+        coordinator.onFinished = { finished.fulfill() }
         fixture.refresh.succeed()
-        await fulfillment(of: [finished, secondPurge], timeout: 1)
-        XCTAssertEqual(events, ["started", "invalidate", "purged", "finished", "invalidate", "purged"])
-        XCTAssertFalse(fixture.markerExists())
+        await fulfillment(of: [finished], timeout: 1)
+        XCTAssertTrue(fixture.markerExists())
+        XCTAssertFalse(events.contains("purged"))
     }
 
     func testForcedManualRefreshWhileOffPreservesRoot() async throws {
@@ -134,7 +134,7 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
     func testMissingRootPurgeIsSuccessfulNoOp() {
         coordinator.startObserving()
         try? FileManager.default.removeItem(at: fixture.root)
-        fixture.preferences.autoRefresh = false
+        coordinator.deleteSnapshots()
         XCTAssertEqual(events, ["invalidate", "purged"])
         XCTAssertFalse(events.contains { $0.hasPrefix("log:") })
     }
@@ -146,10 +146,12 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         coordinator = makeCoordinator(removeItem: failingRemove)
         wireCoordinator()
         coordinator.startObserving()
-        fixture.preferences.autoRefresh = false
+        coordinator.deleteSnapshots()
         XCTAssertEqual(events.first, "invalidate")
         XCTAssertEqual(events.last, "purged")
-        XCTAssertTrue(events.contains { $0.hasPrefix("log:Failed to delete previews:") })
+        XCTAssertTrue(events.contains { $0.hasPrefix("log:Could not delete saved previews.") })
+        XCTAssertTrue(fixture.scheduler.refreshNow(), "capture must resume after a deletion failure")
+        fixture.scheduler.cancelPending()
     }
 
     func testFinishedRunsBeforeCompletionPurge() async {
@@ -158,7 +160,7 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         XCTAssertTrue(fixture.scheduler.schedule(reason: .windowDetected))
         fixture.timers.fireNext()
         await fulfillment(of: [started], timeout: 1)
-        fixture.preferences.autoRefresh = false
+        coordinator.deleteSnapshots()
         events.removeAll()
 
         let finished = expectation(description: "finished")
@@ -167,7 +169,7 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
             self?.events.append("finished")
             finished.fulfill()
         }
-        coordinator.onPurgeCompleted = { [weak self] in
+        coordinator.onPurgeCompleted = { [weak self] _ in
             self?.events.append("purged")
             purged.fulfill()
         }
@@ -210,7 +212,7 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         try fixture.plantMarker()
         coordinator.startObserving()
         coordinator.startObserving()
-        fixture.preferences.autoRefresh = false
+        coordinator.deleteSnapshots()
         XCTAssertEqual(events, ["invalidate", "purged"])
     }
 
@@ -247,7 +249,7 @@ final class SnapshotLifecycleCoordinatorTests: XCTestCase {
         coordinator.onWorkspaceChangeRequest = { [weak self] in self?.events.append("hide") }
         coordinator.onInvalidatePresentation = { [weak self] in self?.events.append("invalidate") }
         coordinator.onLogError = { [weak self] message in self?.events.append("log:\(message)") }
-        coordinator.onPurgeCompleted = { [weak self] in self?.events.append("purged") }
+        coordinator.onPurgeCompleted = { [weak self] _ in self?.events.append("purged") }
     }
 }
 

@@ -16,7 +16,9 @@ public final class ExposePreferences: ObservableObject {
         modifierRawValue: NSEvent.ModifierFlags.option.rawValue
     )
 
-    public static let defaultWindowSwitchHotKey = HotKeySpec(
+    /// The shortcut releases through v0.2.6 used implicitly (never stored)
+    /// when window switching was switched on.
+    static let legacyWindowSwitchHotKey = HotKeySpec(
         keyCode: UInt16(kVK_Tab),
         modifierRawValue: NSEvent.ModifierFlags.option.rawValue
     )
@@ -28,12 +30,6 @@ public final class ExposePreferences: ObservableObject {
     /// App exposé: the focused app's windows from every workspace.
     @Published public var appHotKey: HotKeySpec {
         didSet { appHotKey.store(in: defaults, key: Keys.appHotKey) }
-    }
-
-    /// While the overview is open, claim ⌥1–9 for window selection instead
-    /// of letting AeroSpace's workspace bindings fire.
-    @Published public var modifierQuickSelect: Bool {
-        didSet { defaults.set(modifierQuickSelect, forKey: Keys.modifierQuickSelect) }
     }
 
     /// Workspace overview opens grouped by app; the toggle key while open
@@ -53,12 +49,6 @@ public final class ExposePreferences: ObservableObject {
         groupToggleKey.first ?? "0"
     }
 
-    /// Show the grouping-toggle key as an on-screen hint while the
-    /// workspace overview is open.
-    @Published public var showGroupToggleHint: Bool {
-        didSet { defaults.set(showGroupToggleHint, forKey: Keys.showGroupToggleHint) }
-    }
-
     /// After ⇧1–9 or a drag moves a window to another workspace: follow it
     /// there (switch workspace, dismiss the overview) instead of staying in
     /// the overview.
@@ -73,16 +63,33 @@ public final class ExposePreferences: ObservableObject {
         didSet { defaults.set(threeFingerSwipe, forKey: Keys.threeFingerSwipe) }
     }
 
-    /// ⌥Tab-style cycling over the focused workspace's windows. Ships off:
-    /// AeroSpace's stock config already binds alt-tab, so an on-by-default
-    /// ⌥Tab would collide out of the box.
-    @Published public var windowSwitchEnabled: Bool {
-        didSet { defaults.set(windowSwitchEnabled, forKey: Keys.windowSwitchEnabled) }
+    /// Hold-to-cycle through the focused workspace's windows. Experimental,
+    /// so it ships without a shortcut: assigning one turns the feature on
+    /// and clearing it turns it off — there is no separate switch.
+    @Published public var windowSwitchHotKey: HotKeySpec? {
+        didSet {
+            if let windowSwitchHotKey {
+                windowSwitchHotKey.store(in: defaults, key: Keys.windowSwitchHotKey)
+            } else {
+                defaults.removeObject(forKey: Keys.windowSwitchHotKey)
+            }
+        }
     }
 
-    /// Activation hotkey for the window switcher.
-    @Published public var windowSwitchHotKey: HotKeySpec {
-        didSet { windowSwitchHotKey.store(in: defaults, key: Keys.windowSwitchHotKey) }
+    public var windowSwitchEnabled: Bool {
+        windowSwitchHotKey != nil
+    }
+
+    public func resetKeyboardSettings() {
+        hotKey = Self.defaultHotKey
+        appHotKey = Self.defaultAppHotKey
+        groupToggleKey = "0"
+        windowSwitchHotKey = nil
+    }
+
+    public func resetDisplaySettings() {
+        groupByApp = false
+        followMovedWindow = false
     }
 
     private let defaults: UserDefaults
@@ -90,29 +97,46 @@ public final class ExposePreferences: ObservableObject {
     private enum Keys {
         static let hotKey = "expose.hotKey"
         static let appHotKey = "expose.appHotKey"
-        static let modifierQuickSelect = "expose.modifierQuickSelect"
         static let groupByApp = "expose.groupByApp"
         static let groupToggleKey = "expose.groupToggleKey"
-        static let showGroupToggleHint = "expose.showGroupToggleHint"
         static let followMovedWindow = "expose.followMovedWindow"
         static let threeFingerSwipe = "expose.threeFingerSwipe"
-        static let windowSwitchEnabled = "expose.windowSwitchEnabled"
         static let windowSwitchHotKey = "expose.windowSwitchHotKey"
+        /// Retired: the switch is implied by the shortcut, and the layout
+        /// key hint always shows. Read once for migration, then dropped.
+        static let windowSwitchEnabled = "expose.windowSwitchEnabled"
+        static let showGroupToggleHint = "expose.showGroupToggleHint"
     }
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         hotKey = HotKeySpec.load(from: defaults, key: Keys.hotKey) ?? Self.defaultHotKey
         appHotKey = HotKeySpec.load(from: defaults, key: Keys.appHotKey) ?? Self.defaultAppHotKey
-        modifierQuickSelect = defaults.object(forKey: Keys.modifierQuickSelect) as? Bool ?? true
         groupByApp = defaults.bool(forKey: Keys.groupByApp)
         let storedToggleKey = defaults.string(forKey: Keys.groupToggleKey)?.uppercased().first
         groupToggleKey = storedToggleKey.map(String.init) ?? "0"
-        showGroupToggleHint = defaults.object(forKey: Keys.showGroupToggleHint) as? Bool ?? true
         followMovedWindow = defaults.bool(forKey: Keys.followMovedWindow)
         threeFingerSwipe = defaults.object(forKey: Keys.threeFingerSwipe) as? Bool ?? true
-        windowSwitchEnabled = defaults.object(forKey: Keys.windowSwitchEnabled) as? Bool ?? false
-        windowSwitchHotKey = HotKeySpec.load(from: defaults, key: Keys.windowSwitchHotKey)
-            ?? Self.defaultWindowSwitchHotKey
+        windowSwitchHotKey = Self.migratedWindowSwitchHotKey(from: defaults)
+        defaults.removeObject(forKey: Keys.windowSwitchEnabled)
+        defaults.removeObject(forKey: Keys.showGroupToggleHint)
+    }
+
+    /// Folds the retired on/off switch into the shortcut. An enabled switch
+    /// without a stored shortcut is a v0.2.x user on the implicit ⌥Tab, who
+    /// must keep a working switcher; an explicit off clears the shortcut.
+    /// Idempotent: once the switch key is gone the stored shortcut stands.
+    private static func migratedWindowSwitchHotKey(from defaults: UserDefaults) -> HotKeySpec? {
+        let stored = HotKeySpec.load(from: defaults, key: Keys.windowSwitchHotKey)
+        guard let enabled = defaults.object(forKey: Keys.windowSwitchEnabled) as? Bool else {
+            return stored
+        }
+        guard enabled else {
+            defaults.removeObject(forKey: Keys.windowSwitchHotKey)
+            return nil
+        }
+        let migrated = stored ?? legacyWindowSwitchHotKey
+        migrated.store(in: defaults, key: Keys.windowSwitchHotKey)
+        return migrated
     }
 }

@@ -1,5 +1,10 @@
 # Window Switcher (⌥Tab) — Implementation Plan
 
+> Historical plan. The feature shipped in v0.2.0. On 2026-09-22, the
+> Accessibility-dependent event taps were removed. Cycling now uses Carbon
+> to open an input-owning loading panel, local panel key events, and
+> `HoldToCommitDismiss` for modifier release. The event-tap design below describes the original implementation.
+
 Issue: #3 (Alt-Tab-style window switching scoped to the active AeroSpace
 workspace). Status: planned, not started. Decisions locked by the
 maintainer are marked **[DECIDED]**.

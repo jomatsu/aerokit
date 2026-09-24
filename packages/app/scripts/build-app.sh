@@ -75,6 +75,8 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 install -m 755 "$BINARY" "$MACOS_DIR/$APP_NAME"
+# SwiftPM resources must travel with the installed app, before signing.
+cp -R "$BIN_DIR/AeroKit_AeroKitCore.bundle" "$RESOURCES_DIR/"
 cp "$ICON_FILE" "$RESOURCES_DIR/AppIcon.icns"
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
@@ -83,6 +85,13 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string><string>ja</string><string>zh-Hans</string>
+    <string>ko</string><string>es</string><string>fr</string><string>de</string>
+  </array>
   <key>CFBundleDisplayName</key>
   <string>$APP_NAME</string>
   <key>CFBundleExecutable</key>

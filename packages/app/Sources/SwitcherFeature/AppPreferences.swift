@@ -32,21 +32,21 @@ public enum SnapshotRefreshFrequency: String, CaseIterable, Identifiable, Sendab
         }
     }
 
-    public var label: String {
+    @MainActor public var label: String {
         switch self {
-        case .every30Seconds: "Every 30 seconds"
-        case .everyMinute: "Every minute"
-        case .every3Minutes: "Every 3 minutes"
-        case .every10Minutes: "Every 10 minutes"
+        case .every30Seconds: L10n.tr("Every 30 seconds")
+        case .everyMinute: L10n.tr("Every minute")
+        case .every3Minutes: L10n.tr("Every 3 minutes")
+        case .every10Minutes: L10n.tr("Every 10 minutes")
         }
     }
 
-    public var shortLabel: String {
+    @MainActor public var shortLabel: String {
         switch self {
-        case .every30Seconds: "30 s"
-        case .everyMinute: "1 min"
-        case .every3Minutes: "3 min"
-        case .every10Minutes: "10 min"
+        case .every30Seconds: L10n.tr("30 s")
+        case .everyMinute: L10n.tr("1 min")
+        case .every3Minutes: L10n.tr("3 min")
+        case .every10Minutes: L10n.tr("10 min")
         }
     }
 }
@@ -87,20 +87,18 @@ public final class AppPreferences: ObservableObject {
         didSet { defaults.set(gridColumns, forKey: Keys.gridColumns) }
     }
 
-    @Published public var showOverlayHints: Bool {
-        didSet { defaults.set(showOverlayHints, forKey: Keys.showOverlayHints) }
-    }
-
     @Published public var hotKey: HotKeySpec {
         didSet { hotKey.store(in: defaults, key: Keys.hotKey) }
     }
 
-    @Published public var refreshShortcut: HotKeySpec {
-        didSet { refreshShortcut.store(in: defaults, key: Keys.refreshShortcut) }
+    /// Fixed in-switcher shortcuts: they only act while the grid owns the
+    /// keyboard, so they cannot collide with other apps and need no setting.
+    public var refreshShortcut: HotKeySpec {
+        .defaultRefresh
     }
 
-    @Published public var settingsShortcut: HotKeySpec {
-        didSet { settingsShortcut.store(in: defaults, key: Keys.settingsShortcut) }
+    public var settingsShortcut: HotKeySpec {
+        .defaultSettings
     }
 
     private let defaults: UserDefaults
@@ -113,10 +111,10 @@ public final class AppPreferences: ObservableObject {
         static let preselectNextOnOpen = "switcher.preselectNextOnOpen"
         static let hideEmptyWorkspaces = "switcher.hideEmptyWorkspaces"
         static let gridColumns = "switcher.gridColumns"
-        static let showOverlayHints = "switcher.showOverlayHints"
         static let hotKey = "switcher.hotKey"
-        static let refreshShortcut = "switcher.refreshShortcut"
-        static let settingsShortcut = "switcher.settingsShortcut"
+        /// Retired settings: hints always show and the in-switcher shortcuts
+        /// are fixed. Their stored values are dropped on load.
+        static let retired = ["switcher.showOverlayHints", "switcher.refreshShortcut", "switcher.settingsShortcut"]
     }
 
     public init(defaults: UserDefaults = .standard) {
@@ -139,10 +137,24 @@ public final class AppPreferences: ObservableObject {
         hideEmptyWorkspaces = defaults.bool(forKey: Keys.hideEmptyWorkspaces)
         let storedColumns = defaults.integer(forKey: Keys.gridColumns)
         gridColumns = (2 ... 6).contains(storedColumns) ? storedColumns : 4
-        showOverlayHints = defaults.object(forKey: Keys.showOverlayHints) as? Bool ?? true
         hotKey = HotKeySpec.load(from: defaults, key: Keys.hotKey) ?? .default
-        refreshShortcut = HotKeySpec.load(from: defaults, key: Keys.refreshShortcut) ?? .defaultRefresh
-        settingsShortcut = HotKeySpec.load(from: defaults, key: Keys.settingsShortcut) ?? .defaultSettings
+        Keys.retired.forEach(defaults.removeObject(forKey:))
+    }
+
+    public func resetKeyboardSettings() {
+        switchOnRelease = false
+        preselectNextOnOpen = false
+        hotKey = .default
+    }
+
+    public func resetDisplaySettings() {
+        hideEmptyWorkspaces = false
+        gridColumns = 4
+    }
+
+    public func resetPreviewSettings() {
+        autoRefresh = true
+        refreshFrequency = .every3Minutes
     }
 
     /// Lowercased match tokens parsed from `snapshotExcludedApps`.

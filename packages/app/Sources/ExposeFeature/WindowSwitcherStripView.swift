@@ -2,7 +2,7 @@ import AeroKitCore
 import AppKit
 import SwiftUI
 
-/// The ⌥Tab strip: one card per window — snapshot, icon, title — with a
+/// The window-cycling strip: one card per window — snapshot, icon, title — with a
 /// selection ring on the cycling position, on the shared workspace-strip
 /// panel chrome.
 struct WindowSwitcherStripView: View {

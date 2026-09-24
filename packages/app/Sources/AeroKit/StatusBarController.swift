@@ -1,7 +1,8 @@
+import AeroKitCore
 import AppKit
 
 @MainActor
-final class StatusBarController: NSObject {
+final class StatusBarController: NSObject, NSMenuDelegate {
     var onShowOverview: (() -> Void)?
     var onShowAppWindows: (() -> Void)?
     var onRefreshSnapshots: (() -> Void)?
@@ -28,29 +29,29 @@ final class StatusBarController: NSObject {
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(
-            title: "Show Window Overview",
+            title: L10n.tr("Show Window Overview"),
             action: #selector(showOverview),
             keyEquivalent: ""
         ))
         menu.addItem(NSMenuItem(
-            title: "Show App Windows",
+            title: L10n.tr("Show App Windows"),
             action: #selector(showAppWindows),
             keyEquivalent: ""
         ))
         menu.addItem(NSMenuItem(
-            title: "Refresh Snapshots",
+            title: L10n.tr("Refresh Snapshots"),
             action: #selector(refreshSnapshots),
             keyEquivalent: "r"
         ))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(
-            title: "Settings...",
+            title: L10n.tr("Settings..."),
             action: #selector(openSettings),
             keyEquivalent: ","
         ))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(
-            title: "Quit AeroKit",
+            title: L10n.tr("Quit AeroKit"),
             action: #selector(quit),
             keyEquivalent: "q"
         ))
@@ -59,8 +60,22 @@ final class StatusBarController: NSObject {
             entry.target = self
         }
 
+        menu.delegate = self
         item.menu = menu
         statusItem = item
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        let titles = [
+            L10n.tr("Show Window Overview"),
+            L10n.tr("Show App Windows"),
+            L10n.tr("Refresh Snapshots"),
+            L10n.tr("Settings..."),
+            L10n.tr("Quit AeroKit")
+        ]
+        for (item, title) in zip(menu.items.filter { !$0.isSeparatorItem }, titles) {
+            item.title = title
+        }
     }
 
     @objc

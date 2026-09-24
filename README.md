@@ -33,10 +33,10 @@ focused app across workspaces, then jump directly to the one you need.
 
 ### Window Switcher (experimental)
 
-Hold a hotkey (default ⌥Tab, configurable) to cycle the focused workspace's
-windows in a strip — most-recently-used first; release to commit. Ships
-disabled: AeroSpace's default config already binds alt-tab, so enable it in
-Settings › Exposé and pick a hotkey.
+Set a shortcut in Settings › Windows › Quick window switching to turn on this
+experimental feature, or clear it to turn it off. Hold its modifier key and press
+the shortcut key to cycle the focused workspace's windows in a strip, ordered
+most-recently-used first; release to commit. No shortcut is assigned by default.
 
 ### Trackpad Swipe
 
@@ -45,11 +45,12 @@ Settings › Exposé and pick a hotkey.
 Move between workspaces with a natural three-finger swipe and a compact HUD
 that follows the gesture.
 
-The strip can also flash for workspace switches you make outside AeroKit —
-your own AeroSpace keybindings, the CLI, other automation. AeroKit never
-edits your AeroSpace config: Settings › Swipe › Keyboard Switches shows the
-exact line for your install (already merged into an existing hook when one
-runs) — copy it into `~/.aerospace.toml` yourself and reload:
+The strip can also flash for workspace switches you make outside AeroKit, such
+as your own AeroSpace keybindings, the CLI, or other automation. AeroKit never
+edits your AeroSpace config: Settings › Workspaces › Workspace names when
+switching › Set Up shows the exact line for your install (already merged into an
+existing hook when one runs), so copy it into `~/.aerospace.toml` yourself and
+reload:
 
 ```toml
 exec-on-workspace-change = ['/Applications/AeroKit.app/Contents/MacOS/AeroKit', '--workspace-changed']

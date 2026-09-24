@@ -1,23 +1,24 @@
 import AppKit
 import SwiftUI
 
-/// Shared chrome and capture lifecycle for the settings key recorders: a
-/// keycap button that pulses while recording and feeds key-downs to the
-/// caller. Bare Escape cancels; a rejected key beeps and recording continues.
 public struct KeyRecorderButton: View {
+    @Environment(\.settingsControlLabel)
+    private var label
+    @ObservedObject private var session = KeyRecordingSession.shared
+    @State private var id = UUID()
+    @State private var hitArea = RecorderHitArea()
     let keys: [String]
     let prompt: String
     let helpText: String
     let onRecordingChanged: (Bool) -> Void
-    /// Returns true when the event was accepted and recording should stop.
-    let record: (NSEvent) -> Bool
+    let record: (NSEvent) -> String?
 
     public init(
         keys: [String],
         prompt: String,
         helpText: String,
         onRecordingChanged: @escaping (Bool) -> Void,
-        record: @escaping (NSEvent) -> Bool
+        record: @escaping (NSEvent) -> String?
     ) {
         self.keys = keys
         self.prompt = prompt
@@ -26,84 +27,94 @@ public struct KeyRecorderButton: View {
         self.record = record
     }
 
-    @State private var isRecording = false
-    @State private var monitor: Any?
-    @State private var pulse = false
+    private var isRecording: Bool {
+        session.activeID == id
+    }
 
     public var body: some View {
-        Button(action: toggleRecording) {
-            Group {
-                if isRecording {
-                    Text(prompt)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
-                        .opacity(pulse ? 0.45 : 1)
-                        .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulse)
-                        .onAppear {
-                            pulse = true
-                        }
-                        .onDisappear {
-                            pulse = false
-                        }
-                } else {
-                    KeyCapGroup(keys: keys)
+        VStack(alignment: .trailing, spacing: 8) {
+            Button(action: toggleRecording) {
+                HStack(spacing: 10) {
+                    if isRecording {
+                        Image(systemName: "keyboard")
+                        Text(prompt).font(.system(size: 12, weight: .medium))
+                        Image(systemName: "xmark.circle.fill").accessibilityHidden(true)
+                    } else if keys.isEmpty {
+                        Text(L10n.tr("Set Shortcut…")).font(.system(size: 12))
+                    } else {
+                        KeyCapGroup(keys: keys)
+                        Text(L10n.tr("Change…")).font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .foregroundStyle(isRecording ? Color.accentColor : Color.primary)
+                .background(
+                    isRecording ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.035),
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(isRecording ? Color.accentColor : Color.primary.opacity(0.12))
                 }
             }
-            .frame(minWidth: 76)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 3)
-            .background {
-                RoundedRectangle(cornerRadius: 6.5, style: .continuous)
-                    .fill(.quaternary.opacity(isRecording ? 0.25 : 0.4))
+            .fixedSize(horizontal: true, vertical: false)
+            .buttonStyle(.plain)
+            .background(RecorderRegion(view: hitArea))
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(isRecording ? L10n.tr("Waiting for a shortcut") : keys.joined(separator: " "))
+            .help(helpText)
+
+            if isRecording {
+                Text(session.errorMessage ?? L10n.tr("\(helpText) · Esc to cancel"))
+                    .font(.system(size: 12))
+                    .foregroundStyle(session.errorMessage == nil ? Color.secondary : Color.red)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 250, alignment: .trailing)
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 6.5, style: .continuous)
-                    .strokeBorder(
-                        isRecording ? Color.accentColor.opacity(0.9) : Color.secondary.opacity(0.2),
-                        lineWidth: isRecording ? 1.5 : 1
-                    )
-            }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .help(helpText)
-        .onDisappear {
-            stopRecording()
+        .onDisappear { session.stop(id: id) }
+    }
+
+    private var accessibilityLabel: String {
+        if isRecording {
+            L10n.tr("Cancel recording \(label)")
+        } else if keys.isEmpty {
+            L10n.tr("Set \(label) shortcut")
+        } else {
+            L10n.tr("Change \(label) shortcut")
         }
     }
 
     private func toggleRecording() {
         if isRecording {
-            stopRecording()
+            session.stop(id: id)
         } else {
-            startRecording()
+            session.start(
+                id: id,
+                containsClick: { [weak hitArea] event in
+                    guard let hitArea, event.window === hitArea.window else { return false }
+                    return hitArea.bounds.contains(hitArea.convert(event.locationInWindow, from: nil))
+                },
+                onRecordingChanged: onRecordingChanged,
+                record: record
+            )
         }
+    }
+}
+
+private final class RecorderHitArea: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
+private struct RecorderRegion: NSViewRepresentable {
+    let view: RecorderHitArea
+    func makeNSView(context: Context) -> RecorderHitArea {
+        view
     }
 
-    private func startRecording() {
-        isRecording = true
-        onRecordingChanged(true)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if KeyCode.isBareEscape(event) {
-                stopRecording()
-            } else if record(event) {
-                stopRecording()
-            } else {
-                NSSound.beep()
-            }
-            return nil
-        }
-    }
-
-    private func stopRecording() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
-        }
-        guard isRecording else {
-            return
-        }
-        isRecording = false
-        onRecordingChanged(false)
-    }
+    func updateNSView(_ nsView: RecorderHitArea, context: Context) {}
 }

@@ -7,10 +7,7 @@ public final class SnapshotRefreshScheduler {
     public var onRequestReceived: ((SnapshotReason) -> Void)?
     public var onRefreshStarted: (() -> Void)?
     public var onRefreshProgress: ((Int, Int) -> Void)?
-    /// Carries the reason that triggered the run so the consumer can tell a
-    /// user-requested refresh from a background one — a background run that
-    /// finishes after auto-refresh was turned off must not have its captures
-    /// kept, while an explicit request keeps them regardless.
+    /// Carries the reason that triggered the run for presentation feedback.
     public var onRefreshFinished: ((URL?, SnapshotReason?) -> Void)?
     public var onRefreshFailed: ((String) -> Void)?
 
@@ -29,6 +26,22 @@ public final class SnapshotRefreshScheduler {
     private var pendingReason: SnapshotReason?
     private var queuedReason: SnapshotReason?
     private var isRunning = false
+    private var isSuspended = false
+    private var timerGeneration = UUID()
+
+    public var isRefreshing: Bool {
+        isRunning
+    }
+
+    public func suspend() {
+        isSuspended = true
+        cancelPending()
+    }
+
+    public func resume() {
+        isSuspended = false
+    }
+
     private var lastStartedAt = Date.distantPast
     private var retryAfterFailureAt = Date.distantPast
 
@@ -147,8 +160,9 @@ public final class SnapshotRefreshScheduler {
     /// Drops the debounce timer and any queued follow-up. Turning
     /// auto-refresh off must also cancel work already scheduled: `schedule`
     /// guards new requests, but an armed timer would still fire
-    /// `startRefresh` and recapture right after the purge.
+    /// `startRefresh` after switching to manual updates.
     public func cancelPending() {
+        timerGeneration = UUID()
         if let debounceTimer {
             invalidateTimer(debounceTimer)
         }
@@ -159,6 +173,7 @@ public final class SnapshotRefreshScheduler {
 
     @discardableResult
     private func schedule(reason: SnapshotReason, force: Bool) -> Bool {
+        guard !isSuspended else { return false }
         guard force || preferences.autoRefresh else {
             return false
         }
@@ -186,13 +201,17 @@ public final class SnapshotRefreshScheduler {
             delay = max(settleDelay, minIntervalDelay)
         }
 
+        let generation = UUID()
+        timerGeneration = generation
         debounceTimer = scheduleTimer(delay) { [weak self] in
-            self?.startRefresh()
+            guard let self, timerGeneration == generation else { return }
+            startRefresh()
         }
         return true
     }
 
     private func startRefresh() {
+        guard !isSuspended, !isRunning, pendingReason != nil else { return }
         if let debounceTimer {
             invalidateTimer(debounceTimer)
         }

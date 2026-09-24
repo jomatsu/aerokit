@@ -1,3 +1,5 @@
+import AeroKitCore
+
 public enum SnapshotRefreshFeedback: Equatable {
     case idle
     case refreshing(completed: Int, total: Int)
@@ -8,14 +10,14 @@ public enum SnapshotRefreshFeedback: Equatable {
         self != .idle
     }
 
-    var message: String {
+    @MainActor var message: String {
         switch self {
         case .idle:
             ""
         case .refreshing:
-            "Refreshing screenshots..."
+            L10n.tr("Refreshing screenshots...")
         case .success:
-            "Screenshots updated"
+            L10n.tr("Screenshots updated")
         case let .failure(message):
             message
         }

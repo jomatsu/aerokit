@@ -16,8 +16,7 @@ final class AppCoordinator {
     private let hotKeyCenter = HotKeyCenter()
     private let statusBar = StatusBarController()
     private let client: AeroSpaceClient
-    /// One store, two settings panes: the switcher grid and the swipe ring
-    /// share the workspace order.
+    /// The switcher grid and swipe ring share the order edited in Display.
     private let workspaceOrder = WorkspaceOrderStore()
     private let switcher: SwitcherController
     private let expose: ExposeController
@@ -28,8 +27,11 @@ final class AppCoordinator {
     private let swipeMonitor = TrackpadSwipeMonitor()
     private var settingsWindow: SettingsWindowController?
     private var settingsSummonTask: Task<Void, Never>?
+    /// A fresh install gets the welcome tour once; upgrades never do.
+    private let showsWelcome: Bool
 
     init() {
+        showsWelcome = Self.claimWelcome()
         PreferencesMigration.migrateIfNeeded()
         // Converts the LaunchAgent earlier releases wrote into an
         // SMAppService login item; idempotent and cheap after the first run.
@@ -71,7 +73,7 @@ final class AppCoordinator {
         statusBar.onShowAppWindows = { [weak self] in self?.expose.toggleAppWindows() }
         statusBar.onRefreshSnapshots = { [weak self] in self?.switcher.refreshSnapshotsFromMenu() }
         statusBar.onOpenSettings = { [weak self] in self?.showSettings() }
-        statusBar.onQuit = { NSApp.terminate(nil) }
+        statusBar.onQuit = { AppTermination.terminate() }
         statusBar.start()
 
         switcher.start()
@@ -105,17 +107,35 @@ final class AppCoordinator {
         showOnboardingIfNeeded()
     }
 
-    /// First-run affordance: a feature missing a permission (Screen
-    /// Recording, Accessibility) or a failed hotkey registration is
+    /// Every AeroKit release has written the migration marker on its first
+    /// run, so its absence means nothing ran here before. Read before the
+    /// migration writes it; an upgrade is marked as having seen the tour.
+    private static func claimWelcome(defaults: UserDefaults = .standard) -> Bool {
+        guard !defaults.bool(forKey: WelcomePresentation.shownKey) else { return false }
+        guard defaults.object(forKey: PreferencesMigration.markerKey) == nil else {
+            defaults.set(true, forKey: WelcomePresentation.shownKey)
+            return false
+        }
+        return true
+    }
+
+    /// First-run affordance: missing Screen Recording permission or a
+    /// failed hotkey registration is
     /// explained inline in its settings pane, so surface the settings
     /// window when any feature raises its flag. Checked after the features
     /// started — that's when hotkeys registered and the flags are accurate.
     private func showOnboardingIfNeeded() {
-        guard switcher.needsOnboarding || expose.needsOnboarding || windowSwitcher.needsOnboarding else {
+        guard showsWelcome || switcher.needsOnboarding || expose.needsOnboarding
+            || windowSwitcher.needsOnboarding
+        else {
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.showSettings()
+            guard let self else { return }
+            showSettings()
+            if showsWelcome {
+                settingsWindow?.presentWelcome()
+            }
         }
     }
 
@@ -142,12 +162,10 @@ final class AppCoordinator {
         if settingsWindow == nil {
             settingsWindow = SettingsWindowController(
                 client: client,
-                switcherPane: switcher.makeSettingsPane(),
-                exposePane: VStack(alignment: .leading, spacing: 20) {
-                    expose.makeSettingsPane()
-                    windowSwitcher.makeSettingsSection()
-                },
-                swipePane: swipe.makeSettingsPane()
+                workspacesPane: makeWorkspacesSettingsPage(),
+                windowsPane: makeWindowsSettingsPage(),
+                previewPane: switcher.makePreviewSettingsPane(),
+                welcomeFeatures: makeWelcomeFeatures()
             ) { [weak self] in
                 self?.switcher.refreshSettingsStatus()
             }
@@ -184,6 +202,86 @@ final class AppCoordinator {
             }
             settingsSummonTask = nil
         }
+    }
+
+    /// The welcome tour's pages: the everyday features, with the same demos
+    /// as the settings (i) buttons. Experimental ones stay out of the tour.
+    private func makeWelcomeFeatures() -> [WelcomeFeature] {
+        [
+            WelcomeFeature(
+                title: "See all your workspaces",
+                detail: """
+                Like Mission Control, it shows what’s in every workspace side by side. Open it with \
+                a shortcut and choose where to go.
+                """,
+                demo: AnyView(switcher.makeDemo())
+            ),
+            WelcomeFeature(
+                title: "Swipe between workspaces",
+                detail: """
+                Just like switching desktops on a Mac, swipe left or right with three fingers to \
+                move to the next workspace.
+                """,
+                demo: AnyView(swipe.makeDemo())
+            ),
+            WelcomeFeature(
+                title: "See all windows in a workspace",
+                detail: """
+                Like App Exposé, it lays out the workspace’s windows so none overlap, including \
+                ones hidden in an accordion layout. Press a number to switch.
+                """,
+                demo: AnyView(expose.makeOverviewDemo())
+            ),
+            WelcomeFeature(
+                title: "Open the lists with a swipe",
+                detail: """
+                As on a Mac, swipe up with three fingers for the workspace’s windows, or down for \
+                the current app’s windows.
+                """,
+                demo: AnyView(expose.makeGestureDemo())
+            )
+        ]
+    }
+
+    /// Everything that moves between workspaces — the grid, swipes, the
+    /// name strip — plus the order they all share, edited in one place.
+    private func makeWorkspacesSettingsPage() -> some View {
+        SettingsPage(
+            destination: .workspaces,
+            subtitle: "Switch workspaces from the keyboard or with three-finger swipes.",
+            resetMessage: """
+            Restore the switcher, swipe, name strip, and workspace order. Preview images, macOS gestures, \
+            and your AeroSpace configuration are kept.
+            """,
+            onReset: { [weak self] in
+                self?.switcher.resetSettings()
+                self?.swipe.resetSettings()
+            },
+            content: {
+                switcher.makeSettingsSection()
+                swipe.makeSettingsSection()
+                swipe.makeNameStripSettingsSection()
+                switcher.makeOrderSettingsSection()
+            }
+        )
+    }
+
+    /// Everything that finds or switches windows: the overview with its
+    /// shortcuts and vertical gestures, and the experimental quick switcher.
+    private func makeWindowsSettingsPage() -> some View {
+        SettingsPage(
+            destination: .windows,
+            subtitle: "Find and switch windows with shortcuts or three-finger swipes.",
+            resetMessage: """
+            Restore the window overview, its gestures, and quick window switching. macOS gestures are kept.
+            """,
+            onReset: { [weak self] in self?.expose.resetSettings() },
+            content: {
+                expose.makeOverviewSettingsSection()
+                expose.makeGestureSettingsSection()
+                windowSwitcher.makeSettingsSection()
+            }
+        )
     }
 
     func toggleExpose() {

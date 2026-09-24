@@ -214,17 +214,17 @@ final class ExposeSessionTests: XCTestCase {
 }
 
 @MainActor
-final class ExposeDigitInterceptorTests: XCTestCase {
+final class QuickSelectNumberRowTests: XCTestCase {
     func testNumberRowKeyCodesMapToDigits() {
-        let expected: [Int64: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9]
+        let expected: [UInt16: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9]
         for (keyCode, digit) in expected {
-            XCTAssertEqual(ExposeDigitInterceptor.digit(for: keyCode), digit)
+            XCTAssertEqual(QuickSelect.numberRowDigit(for: keyCode), digit)
         }
     }
 
     func testNonDigitKeyCodesMapToNil() {
-        XCTAssertNil(ExposeDigitInterceptor.digit(for: 29), "0 is not a selection key")
-        XCTAssertNil(ExposeDigitInterceptor.digit(for: 46), "M")
-        XCTAssertNil(ExposeDigitInterceptor.digit(for: 53), "Escape")
+        XCTAssertNil(QuickSelect.numberRowDigit(for: 29), "0 is not a workspace destination")
+        XCTAssertNil(QuickSelect.numberRowDigit(for: 46), "M")
+        XCTAssertNil(QuickSelect.numberRowDigit(for: 53), "Escape")
     }
 }

@@ -50,22 +50,6 @@ public struct HotKeySpec: Codable, Equatable, Sendable {
         return result
     }
 
-    /// The modifiers as CGEventFlags, for event-tap flag matching.
-    public var cgEventFlags: CGEventFlags {
-        var result: CGEventFlags = []
-        let flags = modifierFlags
-        if flags.contains(.control) {
-            result.insert(.maskControl)
-        }
-        if flags.contains(.option) {
-            result.insert(.maskAlternate)
-        }
-        if flags.contains(.command) {
-            result.insert(.maskCommand)
-        }
-        return result
-    }
-
     /// Keycap strings, evaluated using the last-used ASCII-capable layout.
     /// Only the code and modifiers persist; legacy JSON's keyLabel is ignored.
     @MainActor public var displayKeys: [String] {
@@ -90,9 +74,11 @@ public struct HotKeySpec: Codable, Equatable, Sendable {
     }
 
     /// Settings-pane message when RegisterEventHotKey rejects the combination.
-    @MainActor public var registrationFailureMessage: String {
-        "Could not register \(displayKeys.joined()) as the global hotkey. "
-            + "Another app may already use it — record a different shortcut above."
+    @MainActor public var registrationFailureMessage: LocalizedStringResource {
+        """
+        Could not register \(displayKeys.joined()) as the global hotkey. \
+        Another app may already use it — record a different shortcut above.
+        """
     }
 
     /// JSON round-trip in UserDefaults; every feature persists its hotkeys

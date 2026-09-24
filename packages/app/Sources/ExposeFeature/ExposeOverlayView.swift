@@ -1,3 +1,4 @@
+import AeroKitCore
 import AppKit
 import SwiftUI
 
@@ -315,7 +316,7 @@ struct ExposeOverlayView: View {
     private var groupingHintBar: some View {
         Button(action: onToggleGrouping) {
             hintCapsule(
-                session.isGroupedByApp ? "Ungroup" : "Group by App",
+                session.isGroupedByApp ? L10n.tr("Ungroup") : L10n.tr("Group by App"),
                 key: String(quickSelectExclusion ?? "0")
             )
         }
@@ -323,7 +324,7 @@ struct ExposeOverlayView: View {
     }
 
     private var closeHintBar: some View {
-        hintCapsule("Close", key: "⌘W")
+        hintCapsule(L10n.tr("Close"), key: "⌘W")
     }
 
     /// Raycast-style hint chrome shared by every bottom-bar action: the

@@ -4,21 +4,18 @@ import SwitcherFeature
 /// One-time copy of AeroSwitcher-era preferences into the AeroKit domain so
 /// the unification doesn't reset anyone's hotkeys or refresh settings.
 enum PreferencesMigration {
-    private static let markerKey = "migratedFromAeroSwitcher"
+    static let markerKey = "migratedFromAeroSwitcher"
     private static let legacyDomain = "com.nasubikun.aeroswitcher"
 
-    /// All keys AeroSwitcher ever persisted; copied verbatim because the
-    /// storage formats are unchanged.
+    /// AeroSwitcher keys that still map to live settings; copied verbatim
+    /// because the storage formats are unchanged.
     private static let legacyKeys = [
         "snapshot.autoRefresh",
         "snapshot.refreshFrequency",
         "switcher.switchOnRelease",
         "switcher.hideEmptyWorkspaces",
         "switcher.gridColumns",
-        "switcher.showOverlayHints",
-        "switcher.hotKey",
-        "switcher.refreshShortcut",
-        "switcher.settingsShortcut"
+        "switcher.hotKey"
     ]
 
     static func migrateIfNeeded(into defaults: UserDefaults = .standard) {

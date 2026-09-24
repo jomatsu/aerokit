@@ -166,6 +166,11 @@ final class ManualTimerQueue {
         timer.invalidate()
     }
 
+    func takeNextCallback() -> (@MainActor () -> Void)? {
+        guard !items.isEmpty else { return nil }
+        return items.removeFirst().work
+    }
+
     func fireNext() {
         guard !items.isEmpty else {
             return

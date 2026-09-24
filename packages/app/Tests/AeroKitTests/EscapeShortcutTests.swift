@@ -87,17 +87,14 @@ final class EscapeShortcutTests: XCTestCase {
         }
     }
 
-    func testEscapeRefreshShortcutStillWorks() throws {
+    func testFixedRefreshShortcutRefreshesWhileTriggerIsHeld() throws {
         try withOverlay { overlay, preferences in
-            preferences.refreshShortcut = HotKeySpec(
-                keyCode: KeyCode.escape,
-                modifierRawValue: NSEvent.ModifierFlags.command.rawValue
-            )
             var refreshes = 0
             overlay.onReloadSnapshots = { refreshes += 1 }
-            overlay.onCancel = { XCTFail("Modified Escape should refresh") }
-            overlay.onMove = { _ in XCTFail("Modified Escape should refresh") }
-            XCTAssertTrue(try overlay.handleKey(event(flags: .command)))
+            overlay.onCancel = { XCTFail("⌘R should refresh") }
+            overlay.onMove = { _ in XCTFail("⌘R should refresh") }
+            let refresh = preferences.refreshShortcut
+            XCTAssertTrue(try overlay.handleKey(event(code: refresh.keyCode, flags: [.command, .option])))
             XCTAssertEqual(refreshes, 1)
         }
     }

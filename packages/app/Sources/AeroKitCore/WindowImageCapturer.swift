@@ -18,11 +18,22 @@ public enum WindowCaptureError: Error, CustomStringConvertible {
 /// ScreenCaptureKit fallback. Shared by the switcher's snapshot engine and
 /// the exposé's live previews.
 public final class WindowImageCapturer: Sendable {
+    private static let lifetime = ScreenCaptureLifetime()
+
     public init() {}
+
+    /// Stop new captures and finish pending OS requests before exiting. Exiting
+    /// during replayd's authorization checks can produce one alert per request.
+    public static func finishCapturesForTermination() async {
+        lifetime.stop()
+        await lifetime.waitUntilIdle()
+    }
 
     /// Resolves the shareable windows once so a batch of captures shares a
     /// single (comparatively slow) SCShareableContent query.
     public func shareableWindows() async throws -> [CGWindowID: SCWindow] {
+        guard !Task.isCancelled, Self.lifetime.begin() else { throw CancellationError() }
+        defer { Self.lifetime.end() }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         return Dictionary(content.windows.map { ($0.windowID, $0) }) { first, _ in first }
     }
@@ -95,9 +106,10 @@ public final class WindowImageCapturer: Sendable {
     }
 
     public func captureImageFast(windowID: CGWindowID, maxDimension: CGFloat, pointSize: CGSize?) -> CGImage? {
-        guard let create = Self.createImage else {
+        guard let create = Self.createImage, !Task.isCancelled, Self.lifetime.begin() else {
             return nil
         }
+        defer { Self.lifetime.end() }
         let listOption: UInt32 = 1 << 3 // kCGWindowListOptionIncludingWindow
         let resolutionBit: UInt32 = Self.capturesAtNominalResolution(pointSize: pointSize, maxDimension: maxDimension)
             ? 1 << 4 // NominalResolution
@@ -155,6 +167,8 @@ public final class WindowImageCapturer: Sendable {
         displayScale: CGFloat,
         maxDimension: CGFloat
     ) async throws -> CGImage {
+        guard !Task.isCancelled, Self.lifetime.begin() else { throw CancellationError() }
+        defer { Self.lifetime.end() }
         let scale = Self.captureScale(
             frame: window.frame.size,
             displayScale: displayScale,

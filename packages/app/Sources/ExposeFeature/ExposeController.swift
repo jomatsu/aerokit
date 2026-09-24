@@ -16,8 +16,7 @@ enum ExposeScope {
 }
 
 /// Narrow test/production seams for WindowServer reads, overlay effects, and
-/// physical input. Public construction still wires the live overlay, capturer,
-/// and digit tap.
+/// physical input. Public construction wires the live overlay and capturer.
 @MainActor
 struct ExposeControllerHooks {
     var windowBounds: @Sendable () -> [CGWindowID: CGRect]
@@ -26,9 +25,6 @@ struct ExposeControllerHooks {
     var show: (ExposeSession, NSScreen, Bool, ExposeOverlayMotion.Edge) -> Void
     var hide: () -> Void
     var beginEntry: () -> Void
-    var isAccessibilityGranted: () -> Bool
-    var startDigitTap: () -> Bool
-    var stopDigitTap: () -> Void
     var scheduleEntryDeadline: (Int, @escaping @MainActor () -> Void) -> Void
     /// Fires after the off-main query returns, before the epoch guard, so a
     /// superseded load can be observed without sleeping.
@@ -37,8 +33,7 @@ struct ExposeControllerHooks {
 
     static func live(
         overlay: ExposeOverlay,
-        capturer: WindowImageCapturer,
-        interceptor: ExposeDigitInterceptor
+        capturer: WindowImageCapturer
     ) -> ExposeControllerHooks {
         ExposeControllerHooks(
             windowBounds: { capturer.windowBoundsByID() },
@@ -54,9 +49,6 @@ struct ExposeControllerHooks {
             },
             hide: { overlay.hide() },
             beginEntry: { overlay.beginEntry() },
-            isAccessibilityGranted: { AccessibilityPermission.isGranted },
-            startDigitTap: { interceptor.start() },
-            stopDigitTap: { interceptor.stop() },
             scheduleEntryDeadline: { milliseconds, work in
                 Task {
                     try? await Task.sleep(for: .milliseconds(milliseconds))
@@ -78,9 +70,9 @@ public final class ExposeController {
     private let iconResolver = AppIconResolver()
     private let hotKeyCenter: HotKeyCenter
     private let preferences: ExposePreferences
+    private let previousApp = PreviousApplicationTracker()
     private let settingsModel = ExposeSettingsModel()
     private let overlay: ExposeOverlay?
-    private let digitInterceptor: ExposeDigitInterceptor
     private let hooks: ExposeControllerHooks
 
     private var session: ExposeSession?
@@ -92,7 +84,6 @@ public final class ExposeController {
     /// Bumped by every present/dismiss so a presentation that was superseded
     /// while waiting on the CLI can tell and drop its stale result.
     private var presentEpoch = 0
-    private var warnedAccessibilityMissing = false
     private var cancellables: Set<AnyCancellable> = []
 
     /// The coordinator owns the shared trackpad monitor (only one can watch
@@ -115,32 +106,26 @@ public final class ExposeController {
         hooks.isVisible() || presentTask != nil
     }
 
-    /// True when the settings window should open on launch: ⌥-digit quick
-    /// select is enabled (the default) but lacks the Accessibility grant it
-    /// needs — the feature would otherwise silently do nothing — or a
-    /// failed hotkey registration left an overview unreachable. Read after
+    /// True when a failed hotkey registration left an overview unreachable. Read after
     /// `start()` — that's what registers the hotkeys. The app shell
     /// aggregates every feature's flag.
     public var needsOnboarding: Bool {
-        preferences.modifierQuickSelect && !AccessibilityPermission.isGranted
-            || settingsModel.hotKeyErrorMessage != nil
+        settingsModel.hotKeyErrorMessage != nil
             || settingsModel.appHotKeyErrorMessage != nil
     }
 
     public init(client: AeroSpaceClient, hotKeyCenter: HotKeyCenter, preferences: ExposePreferences) {
         let overlay = ExposeOverlay()
         let capturer = WindowImageCapturer()
-        let interceptor = ExposeDigitInterceptor()
         self.client = client
         self.hotKeyCenter = hotKeyCenter
         self.preferences = preferences
         self.overlay = overlay
         self.capturer = capturer
-        digitInterceptor = interceptor
-        hooks = .live(overlay: overlay, capturer: capturer, interceptor: interceptor)
+        hooks = .live(overlay: overlay, capturer: capturer)
     }
 
-    /// Test seam: WindowServer queries, overlay effects, and the digit tap
+    /// Test seam: WindowServer queries and overlay effects
     /// can be replaced without changing the public initializer.
     init(
         client: AeroSpaceClient,
@@ -153,11 +138,11 @@ public final class ExposeController {
         self.preferences = preferences
         overlay = nil
         capturer = WindowImageCapturer()
-        digitInterceptor = ExposeDigitInterceptor()
         self.hooks = hooks
     }
 
     public func start() {
+        previousApp.start()
         overlay?.onCancel = { [weak self] in self?.dismiss() }
         overlay?.onActivate = { [weak self] index in self?.activate(index) }
         overlay?.onMove = { [weak self] move in self?.session?.move(move) }
@@ -171,9 +156,8 @@ public final class ExposeController {
             self?.moveWindow(id: id, toWorkspace: workspace)
         }
         overlay?.groupToggleKey = preferences.groupToggleCharacter
-        digitInterceptor.onDigit = { [weak self] digit in self?.quickSelectDigit(digit) }
 
-        settingsModel.onHotKeyRecordingChanged = { [weak self] isRecording in
+        KeyRecordingSession.shared.recordingChanged.sink { [weak self] isRecording in
             // Suspend the global triggers while recording so the chosen
             // combination reaches the recorder instead of toggling the overview.
             guard let self else { return }
@@ -184,14 +168,46 @@ public final class ExposeController {
                 registerHotKeys()
             }
         }
+        .store(in: &cancellables)
 
         registerHotKeys()
         observePreferences()
     }
 
-    /// Settings pane embedded in the unified settings window.
-    public func makeSettingsPane() -> some View {
-        ExposeSettingsView(model: settingsModel, preferences: preferences)
+    /// The overview demo for the welcome tour, showing the live shortcut.
+    public func makeOverviewDemo() -> some View {
+        WindowOverviewDemoHost(preferences: preferences)
+    }
+
+    public func makeGestureDemo() -> some View {
+        VerticalGestureDemo()
+    }
+
+    public func makeOverviewSettingsSection() -> some View {
+        WindowOverviewSettingsView(
+            model: settingsModel,
+            preferences: preferences,
+            showOverview: { [weak self] in self?.toggle() },
+            showAppWindows: { [weak self] in self?.toggleAppWindows() }
+        )
+    }
+
+    /// Resets the overview's shortcuts, layout, and gestures together with
+    /// the window switcher's shortcut, which shares this preference store.
+    /// The macOS Mission Control gestures are left alone.
+    public func resetSettings() {
+        preferences.resetKeyboardSettings()
+        preferences.resetDisplaySettings()
+        preferences.threeFingerSwipe = true
+    }
+
+    public func makeGestureSettingsSection() -> some View {
+        ExposeGestureSettingsView(
+            model: settingsModel,
+            preferences: preferences,
+            showOverview: { [weak self] in self?.toggle() },
+            showAppWindows: { [weak self] in self?.toggleAppWindows() }
+        )
     }
 
     public func toggle() {
@@ -234,7 +250,8 @@ public final class ExposeController {
     }
 
     /// Returns the user-facing error message, nil on success.
-    private func registerHotKey(_ role: HotKeyRole, spec: HotKeySpec) -> String? {
+    private func registerHotKey(_ role: HotKeyRole, spec: HotKeySpec) -> LocalizedStringResource? {
+        guard KeyRecordingSession.shared.activeID == nil else { return nil }
         do {
             try hotKeyCenter.register(
                 role,
@@ -291,7 +308,8 @@ public final class ExposeController {
             await ExposePresentationLoader.appContext(
                 client: client,
                 windowBounds: windowBounds,
-                preview: preview
+                preview: preview,
+                previousApp: previousApp.application
             )
         }
         hooks.presentationQueryFinished()
@@ -319,7 +337,7 @@ public final class ExposeController {
         hooks.show(
             session,
             screen,
-            scope == .workspace && preferences.showGroupToggleHint,
+            scope == .workspace,
             // The motion continues the gesture that owns each scope: the
             // workspace overview rises after a swipe up, app exposé descends
             // after a swipe down — also from hotkeys, so each scope keeps a
@@ -341,24 +359,6 @@ public final class ExposeController {
                 return
             }
             beginEntry()
-        }
-
-        startDigitInterceptorIfEnabled()
-    }
-
-    private func startDigitInterceptorIfEnabled() {
-        guard preferences.modifierQuickSelect else {
-            return
-        }
-        guard hooks.isAccessibilityGranted() else {
-            if !warnedAccessibilityMissing {
-                warnedAccessibilityMissing = true
-                log.error("option+digit quick select is on but Accessibility access is missing")
-            }
-            return
-        }
-        if !hooks.startDigitTap() {
-            log.error("could not install the option+digit event tap")
         }
     }
 
@@ -426,20 +426,6 @@ public final class ExposeController {
         }
         session.toggleGrouping()
         preferences.groupByApp = session.isGroupedByApp
-    }
-
-    /// ⌥1–9 from the event tap, routed like typed keys so a digit chosen
-    /// as the grouping toggle works there too.
-    private func quickSelectDigit(_ digit: Int) {
-        guard let character = String(digit).first else {
-            return
-        }
-        let toggleKey = preferences.groupToggleCharacter
-        if character == toggleKey {
-            toggleGrouping()
-        } else if let index = QuickSelect.index(for: character, excluding: toggleKey) {
-            activate(index)
-        }
     }
 
     private func activate(_ index: Int) {
@@ -547,7 +533,6 @@ public final class ExposeController {
     }
 
     private func dismiss() {
-        hooks.stopDigitTap()
         presentEpoch += 1
         presentTask?.cancel()
         presentTask = nil

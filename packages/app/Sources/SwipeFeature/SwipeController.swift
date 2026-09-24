@@ -182,19 +182,26 @@ public final class SwipeController {
             .store(in: &cancellables)
     }
 
-    /// Settings pane embedded in the unified settings window.
-    public func makeSettingsPane() -> some View {
-        SwipeSettingsView(
-            model: settingsModel,
-            preferences: preferences,
-            workspaceOrder: workspaceOrderStore,
-            loadWorkspaces: { [client] in
-                try client.workspaceOrderEntries()
-            },
-            reloadAerospaceConfig: { [client] in
-                try client.reloadConfig()
-            }
-        )
+    /// The swipe demo for the welcome tour, following the direction setting.
+    public func makeDemo() -> some View {
+        WorkspaceSwipeDemoHost(preferences: preferences)
+    }
+
+    public func makeSettingsSection() -> some View {
+        SwipeSettingsView(model: settingsModel, preferences: preferences)
+    }
+
+    public func makeNameStripSettingsSection() -> some View {
+        SwipeDisplaySettingsView(preferences: preferences) { [client] in
+            try client.reloadConfig()
+        }
+    }
+
+    /// Resets the swipe gesture and the name strip; macOS gestures and the
+    /// AeroSpace configuration are never touched.
+    public func resetSettings() {
+        preferences.resetTrackpadSettings()
+        preferences.resetDisplaySettings()
     }
 
     /// Reflects the shared monitor's state in this feature's settings pane.

@@ -17,19 +17,20 @@ struct CharacterKeyRecorder: View {
     var body: some View {
         KeyRecorderButton(
             keys: [key.uppercased()],
-            prompt: "Press a key",
-            helpText: "Click, then press the key that toggles grouping while the overview is open",
+            prompt: L10n.tr("Press a key"),
+            helpText: L10n.tr("Press one letter, number or symbol"),
             onRecordingChanged: onRecordingChanged
         ) { event in
-            guard !Self.reservedKeyCodes.contains(event.keyCode),
+            guard event.modifierFlags.isDisjoint(with: [.command, .option, .control]),
+                  !Self.reservedKeyCodes.contains(event.keyCode),
                   let character = event.charactersIgnoringModifiers?.first,
                   character.isASCII,
                   character.isLetter || character.isNumber || character.isPunctuation || character.isSymbol
             else {
-                return false
+                return L10n.tr("Use a letter, number or symbol without ⌃, ⌥ or ⌘. Esc cancels.")
             }
             key = String(character).uppercased()
-            return true
+            return nil
         }
     }
 }

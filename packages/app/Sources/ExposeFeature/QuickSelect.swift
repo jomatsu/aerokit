@@ -5,6 +5,23 @@
 enum QuickSelect {
     private static let allKeys = Array("123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
+    /// Number-row positions for ⇧1–9 workspace moves; shifted characters
+    /// such as "!" cannot identify the destination workspace.
+    static func numberRowDigit(for keyCode: UInt16) -> Int? {
+        switch keyCode {
+        case 18: 1
+        case 19: 2
+        case 20: 3
+        case 21: 4
+        case 23: 5
+        case 22: 6
+        case 26: 7
+        case 28: 8
+        case 25: 9
+        default: nil
+        }
+    }
+
     /// Keycap label shown on the tile; nil past the addressable range.
     static func label(forIndex index: Int, excluding excluded: Character? = nil) -> String? {
         var position = index

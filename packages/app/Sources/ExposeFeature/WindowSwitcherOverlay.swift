@@ -3,19 +3,14 @@ import AppKit
 import SwiftUI
 
 /// Hosts the cycling strip in a borderless, non-activating panel centered
-/// on the focused screen. Key routing has two paths: when Accessibility is
-/// granted, `WindowCycleInterceptor` sees the events globally and this
-/// panel is just a picture; without it, the controller routes this panel's
-/// `keyHandler` through the same pure rules while `HoldToCommitDismiss`
-/// supplies the release-to-commit.
+/// on the focused screen. The panel receives cycling keys while
+/// `HoldToCommitDismiss` detects modifier release to commit the selection.
 @MainActor
 final class WindowSwitcherOverlay {
     var onCancel: (() -> Void)?
-    /// Fallback key routing when no event tap runs.
     var keyHandler: ((NSEvent) -> Bool)?
 
     private let panel: OverlayPanel
-    private var hostingView: NSHostingView<WindowSwitcherStripView>?
 
     var isVisible: Bool {
         panel.isVisible
@@ -44,16 +39,31 @@ final class WindowSwitcherOverlay {
         }
     }
 
-    func show(session: WindowCycleSession, cardWidth: CGFloat, on screen: NSScreen) {
+    func showLoading(on screen: NSScreen) {
+        prepareToShow()
+        panel.contentView = NSHostingView(rootView:
+            ProgressView()
+                .controlSize(.small)
+                .padding(20)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        )
+        panel.setContentSize(NSSize(width: 64, height: 64))
+        centerAndShow(on: screen)
+    }
+
+    private func prepareToShow() {
         // A hide() that has not yet cleared isHiding (next-tick reset)
         // must not block this presentation or its later resign-to-cancel.
         hideGeneration += 1
         isHiding = false
+    }
+
+    func show(session: WindowCycleSession, cardWidth: CGFloat, on screen: NSScreen) {
+        prepareToShow()
         let cardHeight = cardWidth * 9 / 16
         let view = WindowSwitcherStripView(session: session, cardSize: CGSize(width: cardWidth, height: cardHeight))
         let hostingView = NSHostingView(rootView: view)
         panel.contentView = hostingView
-        self.hostingView = hostingView
 
         let count = CGFloat(session.entries.count)
         let contentWidth = WorkspaceCardMetrics.panelPadding * 2
@@ -64,13 +74,16 @@ final class WindowSwitcherOverlay {
             + WorkspaceCardMetrics.captionHeight
             + WorkspaceCardMetrics.panelPadding * 2
         panel.setContentSize(NSSize(width: contentWidth, height: contentHeight))
+        centerAndShow(on: screen)
+    }
 
+    private func centerAndShow(on screen: NSScreen) {
         // Centered, sitting a little below the middle — out of the way of a
         // maximized window's title bar, where the eye already is after a
         // ⌘Tab-style switch.
         let frame = screen.visibleFrame
         panel.setFrameOrigin(
-            NSPoint(x: frame.midX - contentWidth / 2, y: frame.midY - contentHeight / 2 - frame.height * 0.1)
+            NSPoint(x: frame.midX - panel.frame.width / 2, y: frame.midY - panel.frame.height / 2 - frame.height * 0.1)
         )
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
@@ -85,7 +98,6 @@ final class WindowSwitcherOverlay {
         let generation = hideGeneration
         panel.orderOut(nil)
         panel.contentView = nil
-        hostingView = nil
         // Leave isHiding set until the next turn so a delayed resignKey
         // from orderOut cannot cancel a strip that re-opens on this tick
         // (quick tap: show, then commit/hide on the next runloop).

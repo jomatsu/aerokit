@@ -186,9 +186,8 @@ final class ExposeOverlay {
             return true
         }
         // ⇧1 types "!", so the digit comes from the key code, not the
-        // character. Exact-match on shift keeps ⇧Tab on the tab case below
-        // and leaves ⌥digit to the event tap.
-        if flags == .shift, let digit = ExposeDigitInterceptor.digit(for: Int64(event.keyCode)) {
+        // character. Exact-match on shift keeps ⇧Tab on the tab case below.
+        if flags == .shift, let digit = QuickSelect.numberRowDigit(for: event.keyCode) {
             onMoveSelectedToWorkspace?(String(digit))
             return true
         }
@@ -218,11 +217,8 @@ final class ExposeOverlay {
     // swiftlint:enable cyclomatic_complexity
 
     private func handleCharacterKey(_ event: NSEvent) {
-        // ⌥/⌃ combos are never quick-select input: ⌥digit belongs to the
-        // event tap when it is installed and to AeroSpace's own workspace
-        // bindings when it is not — acting on the bare character here would
-        // select a tile on top of whichever of those fired. Swallowed
-        // without acting, like every other unbound key.
+        // Modified digits belong to AeroSpace's workspace bindings, so
+        // they must never also select a window in this overview.
         guard event.modifierFlags.isDisjoint(with: [.option, .control]),
               let character = event.charactersIgnoringModifiers?.first
         else {

@@ -42,6 +42,9 @@ public final class SwitcherController {
     private let feedbackCoordinator: SnapshotFeedbackCoordinator
     private var presentationCache: [WorkspacePresentation]?
     private var selection = SwitcherSelection()
+    /// Opened from the settings Try button: browse without release-to-switch
+    /// until the real shortcut is pressed inside the grid.
+    private var isTrialSession = false
     private var cancellables: Set<AnyCancellable> = []
 
     public init(
@@ -108,9 +111,29 @@ public final class SwitcherController {
         onOpenSettings?()
     }
 
-    /// Settings pane embedded in the unified settings window.
-    public func makeSettingsPane() -> some View {
-        SwitcherSettingsView(model: settingsModel)
+    /// The grid's demo for the welcome tour, following the live settings.
+    public func makeDemo() -> some View {
+        WorkspaceSwitcherDemoHost(preferences: preferences)
+    }
+
+    public func makeSettingsSection() -> some View {
+        WorkspaceSwitcherSettingsView(model: settingsModel)
+    }
+
+    public func makeOrderSettingsSection() -> some View {
+        WorkspaceOrderSettingsView(model: settingsModel)
+    }
+
+    /// Resets the grid's shortcut, selection, and layout plus the shared
+    /// workspace order; preview capture settings are kept.
+    public func resetSettings() {
+        preferences.resetKeyboardSettings()
+        preferences.resetDisplaySettings()
+        workspaceOrderStore.order = WorkspaceOrderStore.defaultOrder
+    }
+
+    public func makePreviewSettingsPane() -> some View {
+        PreviewSettingsView(model: settingsModel)
     }
 
     public func refreshSettingsStatus() {
@@ -147,6 +170,7 @@ public final class SwitcherController {
     }
 
     private func registerLaunchHotKey() {
+        guard KeyRecordingSession.shared.activeID == nil else { return }
         let spec = preferences.hotKey
         do {
             try hotKeyCenter.register(
@@ -218,7 +242,7 @@ extension SwitcherController {
             // cmd-tab mode: releasing the trigger modifier commits the
             // selection; otherwise the overlay stays open until
             // Enter/click/quick-select.
-            guard let self, preferences.switchOnRelease else {
+            guard let self, preferences.switchOnRelease, !isTrialSession else {
                 return
             }
             selectCurrentWorkspace()
@@ -235,10 +259,19 @@ extension SwitcherController {
     }
 
     private func wireSettings() {
+        // Try is clicked with no modifier held, which hold-to-switch would
+        // read as an instant release and commit. Open it to browse instead;
+        // pressing the real shortcut inside turns hold-to-switch back on.
+        settingsModel.onShowSwitcher = { [weak self] in
+            guard let self, !overlay.isVisible else { return }
+            show(initialMove: .next)
+            isTrialSession = true
+        }
+        settingsModel.onDeleteSnapshots = { [weak self] in self?.snapshotLifecycle.deleteSnapshots() }
         settingsModel.onRefreshSnapshots = { [weak self] in
             self?.refreshSnapshotsFromSettings() ?? false
         }
-        settingsModel.onHotKeyRecordingChanged = { [weak self] isRecording in
+        KeyRecordingSession.shared.recordingChanged.sink { [weak self] isRecording in
             guard let self else { return }
             // Suspend the global trigger while recording so the chosen
             // combination reaches the recorder instead of opening the switcher.
@@ -248,6 +281,7 @@ extension SwitcherController {
                 registerLaunchHotKey()
             }
         }
+        .store(in: &cancellables)
     }
 
     private func wireSnapshotScheduler() {
@@ -273,8 +307,8 @@ extension SwitcherController {
         snapshotLifecycle.onLogError = { [weak self] message in
             self?.logError(message)
         }
-        snapshotLifecycle.onPurgeCompleted = { [weak self] in
-            self?.settingsModel.refreshStatus()
+        snapshotLifecycle.onPurgeCompleted = { [weak self] error in
+            self?.settingsModel.markSnapshotsDeleted(error: error)
             self?.updateOverlayIfVisible()
         }
 
@@ -316,6 +350,7 @@ extension SwitcherController {
 
 extension SwitcherController {
     private func show(initialMove: SelectionMove) {
+        isTrialSession = false
         selection.begin(in: workspaces)
 
         overlay.show(
@@ -346,6 +381,7 @@ extension SwitcherController {
 
     private func cycle(_ move: SelectionMove) {
         if overlay.isVisible {
+            isTrialSession = false
             moveSelection(move)
         } else {
             show(initialMove: move)
@@ -440,7 +476,7 @@ extension SwitcherController {
         case let .failure(error):
             logError("Failed to refresh workspaces: \(error)")
             if overlay.isVisible {
-                feedbackCoordinator.showTransientFailure("Could not load workspaces from AeroSpace")
+                feedbackCoordinator.showTransientFailure(L10n.tr("Could not load workspaces from AeroSpace"))
             }
         }
     }
@@ -481,12 +517,12 @@ extension SwitcherController {
         settingsModel.refreshStatus()
 
         guard ScreenCapturePermission.isGranted else {
-            feedbackCoordinator.markFailed("Grant Screen Recording permission before refreshing snapshots.")
+            feedbackCoordinator.markFailed(L10n.tr("Grant Screen Recording permission before refreshing snapshots."))
             return false
         }
 
         guard snapshotScheduler.refreshNow() else {
-            feedbackCoordinator.markFailed("Snapshot refresh could not be started.")
+            feedbackCoordinator.markFailed(L10n.tr("Snapshot refresh could not be started."))
             return false
         }
 

@@ -43,7 +43,7 @@ public final class TrackpadSwipeMonitor {
     /// Settings-pane message for a feature whose swipe gesture is enabled
     /// while the shared monitor could not start; nil when there is nothing
     /// to report. Shared so the wording cannot drift between features.
-    public static func unavailableMessage(gestureEnabled: Bool, monitorRunning: Bool) -> String? {
+    public static func unavailableMessage(gestureEnabled: Bool, monitorRunning: Bool) -> LocalizedStringResource? {
         gestureEnabled && !monitorRunning
             ? "Could not access the trackpad for three-finger swipes."
             : nil

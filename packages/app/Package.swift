@@ -8,6 +8,7 @@ let swiftSettings: [SwiftSetting] = [
 
 let package = Package(
     name: "AeroKit",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v14)
     ],
@@ -17,6 +18,7 @@ let package = Package(
     targets: [
         .target(
             name: "AeroKitCore",
+            resources: [.process("Resources")],
             swiftSettings: swiftSettings
         ),
         .target(

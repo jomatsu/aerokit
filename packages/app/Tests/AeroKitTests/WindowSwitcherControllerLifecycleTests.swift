@@ -14,6 +14,8 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
         defaults = UserDefaults(suiteName: suiteName)
         defaults.removePersistentDomain(forName: suiteName)
         defaults.set(true, forKey: "expose.windowSwitchEnabled")
+        HotKeySpec(keyCode: KeyCode.space, modifierRawValue: NSEvent.ModifierFlags.option.rawValue)
+            .store(in: defaults, key: "expose.windowSwitchHotKey")
     }
 
     override func tearDown() async throws {
@@ -34,33 +36,116 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
         XCTAssertTrue(host.events.isEmpty)
     }
 
-    func testTapUnregistersCarbonAtOpenAndReregistersOnDismiss() async {
-        let runner = populatedRunner()
-        runner.holdUntilReleased()
-        let host = FakeSwitcherHost(mode: .tapSucceeds)
-        let controller = makeController(runner: runner, host: host)
+    /// v0.2.x stored only the switch; an enabled user ran on the implicit
+    /// ⌥Tab and must keep it after the switch folds into the shortcut.
+    func testLegacyEnabledPreferenceWithoutShortcutMigratesToOptionTab() {
+        defaults.removeObject(forKey: "expose.windowSwitchHotKey")
+        let preferences = ExposePreferences(defaults: defaults)
+        let host = FakeSwitcherHost()
+        let controller = WindowSwitcherController(
+            client: PresentationCommandRunner().makeClient(),
+            preferences: preferences,
+            hooks: host.hooks(modifiersHeld: true, stacking: [])
+        )
+        controller.start()
 
-        controller.handle(.windowCycleForward)
-        XCTAssertEqual(host.events, [.tapStart] + carbonOff)
-        XCTAssertTrue(controller.isActive)
-
-        runner.release()
-        await waitUntil { host.sessions.count == 1 }
-        XCTAssertEqual(host.events, [.tapStart] + carbonOff, "tap path must not wait until show to drop Carbon")
-
-        controller.cancelIfActive()
-        XCTAssertEqual(host.events, [.tapStart] + carbonOff + [.tapStop] + carbonOn)
-        XCTAssertFalse(controller.isActive)
+        let optionTab = HotKeySpec(keyCode: KeyCode.tab, modifierRawValue: NSEvent.ModifierFlags.option.rawValue)
+        XCTAssertEqual(preferences.windowSwitchHotKey, optionTab)
+        XCTAssertEqual(host.hotKeys.registrations[.windowCycleForward]?.keyCode, UInt32(KeyCode.tab))
+        XCTAssertNil(defaults.object(forKey: "expose.windowSwitchEnabled"))
+        XCTAssertEqual(ExposePreferences(defaults: defaults).windowSwitchHotKey, optionTab)
     }
 
-    func testFallbackKeepsCarbonThroughLoadThenReleasesAfterShow() async {
+    func testLegacyDisabledPreferenceClearsStoredShortcut() {
+        defaults.set(false, forKey: "expose.windowSwitchEnabled")
+        let preferences = ExposePreferences(defaults: defaults)
+
+        XCTAssertNil(preferences.windowSwitchHotKey)
+        XCTAssertFalse(preferences.windowSwitchEnabled)
+        XCTAssertNil(defaults.object(forKey: "expose.windowSwitchHotKey"))
+        XCTAssertNil(defaults.object(forKey: "expose.windowSwitchEnabled"))
+    }
+
+    func testFirstShortcutAssignmentRegistersItsNewValue() {
+        defaults.removeObject(forKey: "expose.windowSwitchHotKey")
+        let preferences = ExposePreferences(defaults: defaults)
+        let host = FakeSwitcherHost()
+        let controller = WindowSwitcherController(
+            client: PresentationCommandRunner().makeClient(),
+            preferences: preferences,
+            hooks: host.hooks(modifiersHeld: true, stacking: [])
+        )
+        controller.start()
+        let shortcut = HotKeySpec(keyCode: KeyCode.tab, modifierRawValue: NSEvent.ModifierFlags.control.rawValue)
+
+        preferences.windowSwitchHotKey = shortcut
+
+        XCTAssertTrue(preferences.windowSwitchEnabled)
+        XCTAssertEqual(host.hotKeys.registrations[.windowCycleForward]?.keyCode, UInt32(shortcut.keyCode))
+        XCTAssertEqual(host.hotKeys.registrations[.windowCycleForward]?.modifiers, shortcut.carbonModifiers)
+        let restored = ExposePreferences(defaults: defaults)
+        XCTAssertEqual(restored.windowSwitchHotKey, shortcut)
+        XCTAssertTrue(restored.windowSwitchEnabled)
+    }
+
+    func testDisablingDuringLoadCancelsAndUnregistersImmediately() async {
+        let preferences = ExposePreferences(defaults: defaults)
         let runner = populatedRunner()
         runner.holdUntilReleased()
-        let host = FakeSwitcherHost(mode: .accessibilityDenied)
+        let host = FakeSwitcherHost()
+        let controller = WindowSwitcherController(
+            client: runner.makeClient(),
+            preferences: preferences,
+            hooks: host.hooks(modifiersHeld: true, stacking: [11, 12, 13])
+        )
+        controller.start()
+        controller.handle(.windowCycleForward)
+
+        preferences.windowSwitchHotKey = nil
+
+        XCTAssertFalse(controller.isActive)
+        XCTAssertTrue(host.hotKeys.registrations.isEmpty)
+        XCTAssertEqual(Array(host.events.suffix(3)), [.dismissorEnd] + carbonOff)
+        runner.release()
+        await waitUntil { host.loadsFinished == 1 }
+        XCTAssertTrue(host.sessions.isEmpty)
+        XCTAssertFalse(runner.invocations.contains { $0.first == "focus" })
+    }
+
+    func testReplacingActiveShortcutCancelsAndUsesNewRegistration() async {
+        let preferences = ExposePreferences(defaults: defaults)
+        let runner = populatedRunner()
+        let host = FakeSwitcherHost()
+        let controller = WindowSwitcherController(
+            client: runner.makeClient(),
+            preferences: preferences,
+            hooks: host.hooks(modifiersHeld: true, stacking: [11, 12, 13])
+        )
+        controller.start()
+        controller.handle(.windowCycleForward)
+        await waitUntil { host.sessions.count == 1 }
+        let shortcut = HotKeySpec(keyCode: KeyCode.tab, modifierRawValue: NSEvent.ModifierFlags.control.rawValue)
+
+        preferences.windowSwitchHotKey = shortcut
+
+        XCTAssertFalse(controller.isActive)
+        XCTAssertFalse(runner.invocations.contains { $0.first == "focus" })
+        XCTAssertEqual(host.hotKeys.registrations[.windowCycleForward]?.keyCode, UInt32(shortcut.keyCode))
+        XCTAssertEqual(host.hotKeys.registrations[.windowCycleForward]?.modifiers, shortcut.carbonModifiers)
+        preferences.windowSwitchHotKey = nil
+        XCTAssertTrue(host.hotKeys.registrations.isEmpty)
+        XCTAssertFalse(preferences.windowSwitchEnabled)
+        XCTAssertNil(defaults.object(forKey: "expose.windowSwitchHotKey"))
+    }
+
+    func testLoadingPanelTakesKeysBeforeTheQueryReturns() async {
+        let runner = populatedRunner()
+        runner.holdUntilReleased()
+        let host = FakeSwitcherHost()
         let controller = makeController(runner: runner, host: host)
 
         controller.handle(.windowCycleForward)
-        XCTAssertEqual(host.events, [.dismissorBegin])
+        XCTAssertEqual(host.events, [.dismissorBegin] + carbonOff)
         XCTAssertTrue(controller.isActive)
 
         runner.release()
@@ -68,63 +153,23 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
         XCTAssertEqual(
             host.events,
             [.dismissorBegin] + carbonOff,
-            "fallback keeps Carbon registered through the load, then releases after show"
+            "Carbon is released as soon as the loading panel takes keyboard input"
         )
 
         controller.cancelIfActive()
         XCTAssertEqual(host.events, [.dismissorBegin] + carbonOff + [.dismissorEnd] + carbonOn)
     }
 
-    func testTapInstallFailureFollowsFallbackCarbonOwnership() async {
+    func testDismissDuringLoadDropsTheStaleResult() async {
         let runner = populatedRunner()
         runner.holdUntilReleased()
-        let host = FakeSwitcherHost(mode: .tapInstallFails)
+        let host = FakeSwitcherHost()
         let controller = makeController(runner: runner, host: host)
 
         controller.handle(.windowCycleForward)
-        XCTAssertEqual(host.events, [.tapStart, .dismissorBegin])
-
-        runner.release()
-        await waitUntil { host.sessions.count == 1 }
-        XCTAssertEqual(host.events, [.tapStart, .dismissorBegin] + carbonOff)
-
+        XCTAssertEqual(host.events, [.dismissorBegin] + carbonOff)
         controller.cancelIfActive()
-        XCTAssertEqual(
-            host.events,
-            [.tapStart, .dismissorBegin] + carbonOff + [.dismissorEnd] + carbonOn
-        )
-        XCTAssertFalse(host.events.contains(.tapStop), "a failed start is not stored, so dismiss must not stop it")
-    }
-
-    func testDismissDuringTapLoadDropsTheStaleResult() async {
-        let runner = populatedRunner()
-        runner.holdUntilReleased()
-        let host = FakeSwitcherHost(mode: .tapSucceeds)
-        let controller = makeController(runner: runner, host: host)
-
-        controller.handle(.windowCycleForward)
-        controller.cancelIfActive()
-        XCTAssertFalse(controller.isActive)
-        XCTAssertEqual(host.events.last, .register(.windowCycleBackward))
-
-        runner.release()
-        await waitUntil { host.loadsFinished == 1 }
-
-        XCTAssertTrue(host.sessions.isEmpty)
-        XCTAssertEqual(host.hideCount, 1)
-        XCTAssertFalse(runner.invocations.contains { $0.first == "focus" })
-    }
-
-    func testDismissDuringFallbackLoadDropsTheStaleResult() async {
-        let runner = populatedRunner()
-        runner.holdUntilReleased()
-        let host = FakeSwitcherHost(mode: .accessibilityDenied)
-        let controller = makeController(runner: runner, host: host)
-
-        controller.handle(.windowCycleForward)
-        XCTAssertEqual(host.events, [.dismissorBegin])
-        controller.cancelIfActive()
-        XCTAssertEqual(host.events, [.dismissorBegin, .dismissorEnd] + carbonOn)
+        XCTAssertEqual(host.events, [.dismissorBegin] + carbonOff + [.dismissorEnd] + carbonOn)
 
         runner.release()
         await waitUntil { host.loadsFinished == 1 }
@@ -133,14 +178,14 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
         XCTAssertFalse(runner.invocations.contains { $0.first == "focus" })
     }
 
-    func testPendingCarbonRepeatsDuringFallbackLoadAreAppliedWhenTheSessionLands() async {
+    func testQueuedCarbonRepeatsDuringLoadAreAppliedWhenTheSessionLands() async {
         let runner = populatedRunner()
         runner.holdUntilReleased()
-        let host = FakeSwitcherHost(mode: .accessibilityDenied)
+        let host = FakeSwitcherHost()
         let controller = makeController(runner: runner, host: host)
 
         controller.handle(.windowCycleForward)
-        XCTAssertEqual(host.events, [.dismissorBegin], "Carbon must still be the repeat path during fallback load")
+        XCTAssertTrue(host.isVisible, "the loading panel receives keys immediately")
         controller.handle(.windowCycleBackward)
         controller.handle(.windowCycleBackward)
         runner.release()
@@ -152,52 +197,50 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
         XCTAssertTrue(controller.isActive)
     }
 
-    func testCycleTapDuringLoadIsAppliedWhenTheSessionLands() async {
+    func testPanelRepeatsDuringLoadAreAppliedWhenTheSessionLands() async throws {
         let runner = populatedRunner()
         runner.holdUntilReleased()
-        let host = FakeSwitcherHost(mode: .tapSucceeds)
+        let host = FakeSwitcherHost()
         let controller = makeController(runner: runner, host: host)
 
         controller.handle(.windowCycleForward)
-        host.cycleTap.onMove?(.next)
+        XCTAssertEqual(host.loadingShows, 1)
+        XCTAssertTrue(host.isVisible)
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.space, repeating: true)))
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.space, repeating: true)))
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.space, flags: [.option, .shift])))
         runner.release()
 
         await waitUntil { host.sessions.count == 1 }
-
         XCTAssertEqual(host.sessions[0].selectedEntry?.id, 13)
+        controller.cancelIfActive()
     }
 
-    func testTapReleaseDuringLoadShowsThenCommitsAfter100ms() async {
+    func testEscapeWhileLoadingPreventsReleaseFromCommitting() async throws {
         let runner = populatedRunner()
         runner.holdUntilReleased()
-        let host = FakeSwitcherHost(mode: .tapSucceeds)
-        let controller = makeController(runner: runner, host: host, modifiersHeld: true)
+        let host = FakeSwitcherHost()
+        let controller = makeController(runner: runner, host: host)
 
         controller.handle(.windowCycleForward)
-        host.cycleTap.onCommit?()
-        XCTAssertTrue(host.sessions.isEmpty)
+        XCTAssertTrue(host.isVisible)
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.escape, flags: .option)))
+        host.holdDismiss.onModifierRelease?()
         runner.release()
-
-        await waitUntil { host.sessions.count == 1 }
-
-        XCTAssertEqual(host.quickTapDelays, [0.1])
-        XCTAssertEqual(host.hideCount, 0)
-        XCTAssertFalse(runner.invocations.contains { $0.first == "focus" })
-        XCTAssertTrue(controller.isActive)
-
-        host.fireQuickTapCommit()
-        await waitUntil { host.hideCount == 1 }
+        await waitUntil { host.loadsFinished == 1 }
 
         XCTAssertFalse(controller.isActive)
-        XCTAssertTrue(host.events.contains(.tapStop))
-        await waitUntil { runner.invocations.contains { $0 == ["focus", "--window-id", "12"] } }
+        XCTAssertTrue(host.sessions.isEmpty)
+        XCTAssertTrue(host.quickTapDelays.isEmpty)
+        XCTAssertEqual(host.hideCount, 1)
+        XCTAssertFalse(runner.invocations.contains { $0.first == "focus" })
         XCTAssertEqual(Array(host.events.suffix(4)), carbonOn)
     }
 
-    func testFallbackReleaseDuringLoadShowsThenCommitsAfter100ms() async {
+    func testReleaseDuringLoadShowsThenCommitsAfter100ms() async {
         let runner = populatedRunner()
         runner.holdUntilReleased()
-        let host = FakeSwitcherHost(mode: .accessibilityDenied)
+        let host = FakeSwitcherHost()
         let controller = makeController(runner: runner, host: host, modifiersHeld: true)
 
         controller.handle(.windowCycleForward)
@@ -218,7 +261,7 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
 
     func testQuickTapShowsBeforeTheDelayedCommit() async {
         let runner = populatedRunner()
-        let host = FakeSwitcherHost(mode: .tapSucceeds)
+        let host = FakeSwitcherHost()
         let controller = makeController(runner: runner, host: host, modifiersHeld: false)
 
         controller.handle(.windowCycleForward)
@@ -239,7 +282,7 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
 
     func testQuickTapCommitIsDroppedIfDismissedBeforeTheDelay() async {
         let runner = populatedRunner()
-        let host = FakeSwitcherHost(mode: .tapSucceeds)
+        let host = FakeSwitcherHost()
         let controller = makeController(runner: runner, host: host, modifiersHeld: false)
 
         controller.handle(.windowCycleForward)
@@ -252,10 +295,10 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
         XCTAssertFalse(runner.invocations.contains { $0.first == "focus" })
     }
 
-    func testEmptyResultStopsTheCycleTapAndReregistersCarbon() async {
+    func testEmptyResultEndsDismissorAndReregistersCarbon() async {
         let runner = PresentationCommandRunner()
         runner.focusedWorkspaceWindowsOutput = ""
-        let host = FakeSwitcherHost(mode: .tapSucceeds)
+        let host = FakeSwitcherHost()
         let controller = makeController(runner: runner, host: host)
 
         controller.handle(.windowCycleForward)
@@ -263,49 +306,93 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
         await waitUntil { !controller.isActive }
 
         XCTAssertTrue(host.sessions.isEmpty)
-        XCTAssertEqual(host.events, [.tapStart] + carbonOff + [.tapStop] + carbonOn)
+        XCTAssertEqual(host.events, [.dismissorBegin] + carbonOff + [.dismissorEnd] + carbonOn)
+    }
+
+    func testListingErrorEndsDismissor() async {
+        let runner = populatedRunner()
+        runner.failingPrefixes = [["list-windows", "--workspace", "focused"]]
+        let host = FakeSwitcherHost()
+        let controller = makeController(runner: runner, host: host)
+
+        controller.handle(.windowCycleForward)
+        await waitUntil { host.loadsFinished == 1 }
+        await waitUntil { !controller.isActive }
+
+        XCTAssertEqual(host.events, [.dismissorBegin] + carbonOff + [.dismissorEnd] + carbonOn)
+    }
+
+    func testPanelKeysCycleForwardBackwardAndConsumeUnboundKeys() async throws {
+        let runner = populatedRunner()
+        let host = FakeSwitcherHost()
+        let controller = makeController(runner: runner, host: host)
+        controller.handle(.windowCycleForward)
+        await waitUntil { host.sessions.count == 1 }
+        let session = host.sessions[0]
+        XCTAssertEqual(session.selectedEntry?.id, 12)
+
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.space, repeating: true)))
+        XCTAssertEqual(session.selectedEntry?.id, 13)
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.space, flags: [.option, .shift])))
+        XCTAssertEqual(session.selectedEntry?.id, 12)
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.leftArrow)))
+        XCTAssertEqual(session.selectedEntry?.id, 11)
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.rightArrow)))
+        XCTAssertEqual(session.selectedEntry?.id, 12)
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.tab)))
+        XCTAssertEqual(session.selectedEntry?.id, 12, "unbound keys must not change the selection")
+        XCTAssertEqual(host.holdDismiss.notedKeyCodes.count, 5, "panel keys must re-arm release detection")
+        controller.cancelIfActive()
+    }
+
+    func testModifierReleaseCommitsTheWindowChosenWithPanelKeys() async throws {
+        let runner = populatedRunner()
+        let host = FakeSwitcherHost()
+        let controller = makeController(runner: runner, host: host)
+        controller.handle(.windowCycleForward)
+        await waitUntil { host.sessions.count == 1 }
+        _ = try controller.handleKey(keyEvent(KeyCode.space))
+
+        host.holdDismiss.onModifierRelease?()
+
+        XCTAssertFalse(controller.isActive)
+        XCTAssertTrue(host.events.contains(.dismissorEnd))
+        XCTAssertEqual(Array(host.events.suffix(4)), carbonOn)
+        await waitUntil { runner.invocations.contains { $0 == ["focus", "--window-id", "13"] } }
+    }
+
+    func testEscapeCancelsPanelWithoutFocusingAWindow() async throws {
+        let runner = populatedRunner()
+        let host = FakeSwitcherHost()
+        let controller = makeController(runner: runner, host: host)
+        controller.handle(.windowCycleForward)
+        await waitUntil { host.sessions.count == 1 }
+
+        XCTAssertTrue(try controller.handleKey(keyEvent(KeyCode.escape)))
+
+        XCTAssertFalse(controller.isActive)
         XCTAssertEqual(host.hideCount, 1)
+        XCTAssertFalse(runner.invocations.contains { $0.first == "focus" })
+        XCTAssertEqual(Array(host.events.suffix(4)), carbonOn)
     }
 
-    func testEmptyFallbackEndsDismissorAndReregistersCarbon() async {
-        let runner = PresentationCommandRunner()
-        runner.focusedWorkspaceWindowsOutput = ""
-        let host = FakeSwitcherHost(mode: .accessibilityDenied)
-        let controller = makeController(runner: runner, host: host)
-
-        controller.handle(.windowCycleForward)
-        await waitUntil { host.loadsFinished == 1 }
-        await waitUntil { !controller.isActive }
-
-        XCTAssertTrue(host.sessions.isEmpty)
-        XCTAssertEqual(host.events, [.dismissorBegin, .dismissorEnd] + carbonOn)
-    }
-
-    func testListingErrorStopsTheCycleTap() async {
-        let runner = populatedRunner()
-        runner.failingPrefixes = [["list-windows", "--workspace", "focused"]]
-        let host = FakeSwitcherHost(mode: .tapSucceeds)
-        let controller = makeController(runner: runner, host: host)
-
-        controller.handle(.windowCycleForward)
-        await waitUntil { host.loadsFinished == 1 }
-        await waitUntil { !controller.isActive }
-
-        XCTAssertTrue(host.sessions.isEmpty)
-        XCTAssertEqual(host.events, [.tapStart] + carbonOff + [.tapStop] + carbonOn)
-    }
-
-    func testListingErrorOnFallbackEndsDismissor() async {
-        let runner = populatedRunner()
-        runner.failingPrefixes = [["list-windows", "--workspace", "focused"]]
-        let host = FakeSwitcherHost(mode: .accessibilityDenied)
-        let controller = makeController(runner: runner, host: host)
-
-        controller.handle(.windowCycleForward)
-        await waitUntil { host.loadsFinished == 1 }
-        await waitUntil { !controller.isActive }
-
-        XCTAssertEqual(host.events, [.dismissorBegin, .dismissorEnd] + carbonOn)
+    private func keyEvent(
+        _ code: UInt16,
+        flags: NSEvent.ModifierFlags = .option,
+        repeating: Bool = false
+    ) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: flags,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: repeating,
+            keyCode: code
+        ))
     }
 
     private var carbonOff: [SwitcherTrace] {
@@ -349,38 +436,26 @@ final class WindowSwitcherControllerLifecycleTests: XCTestCase {
 }
 
 private enum SwitcherTrace: Equatable {
-    case tapStart
-    case tapStop
     case dismissorBegin
     case dismissorEnd
     case unregister(HotKeyRole)
     case register(HotKeyRole)
 }
 
-private enum SwitcherInteractionMode {
-    case tapSucceeds
-    case tapInstallFails
-    case accessibilityDenied
-}
-
 @MainActor
 private final class FakeSwitcherHost {
-    let cycleTap = FakeCycleTap()
     let holdDismiss = FakeHoldDismiss()
     let hotKeys = RecordingHotKeys()
     var events: [SwitcherTrace] = []
     var isVisible = false
+    var loadingShows = 0
     var sessions: [WindowCycleSession] = []
     var hideCount = 0
     var loadsFinished = 0
     var quickTapDelays: [TimeInterval] = []
     private var pendingCommit: [() -> Void] = []
-    private let mode: SwitcherInteractionMode
 
-    init(mode: SwitcherInteractionMode = .tapSucceeds) {
-        self.mode = mode
-        cycleTap.host = self
-        cycleTap.startSucceeds = mode != .tapInstallFails
+    init() {
         holdDismiss.host = self
         hotKeys.host = self
     }
@@ -402,6 +477,10 @@ private final class FakeSwitcherHost {
             stacking: { stacking },
             resolveScreen: { PresentationScreenResolver.screen(for: $0) },
             isVisible: { [weak self] in self?.isVisible ?? false },
+            showLoading: { [weak self] _ in
+                self?.loadingShows += 1
+                self?.isVisible = true
+            },
             show: { [weak self] session, _, _ in
                 self?.sessions.append(session)
                 self?.isVisible = true
@@ -411,18 +490,6 @@ private final class FakeSwitcherHost {
                 self?.isVisible = false
             },
             modifiersHeld: { _ in modifiersHeld },
-            isAccessibilityGranted: { [weak self] in
-                guard let self else {
-                    return false
-                }
-                return mode != .accessibilityDenied
-            },
-            makeCycleTap: { [weak self] _ in
-                guard let self else {
-                    return FakeCycleTap()
-                }
-                return cycleTap
-            },
             makeHoldDismiss: { [weak self] _, _ in
                 guard let self else {
                     return FakeHoldDismiss()
@@ -443,27 +510,10 @@ private final class FakeSwitcherHost {
 }
 
 @MainActor
-private final class FakeCycleTap: WindowCycleTapping {
-    weak var host: FakeSwitcherHost?
-    var startSucceeds = true
-    var onMove: ((SelectionMove) -> Void)?
-    var onCancel: (() -> Void)?
-    var onCommit: (() -> Void)?
-
-    func start() -> Bool {
-        host?.events.append(.tapStart)
-        return startSucceeds
-    }
-
-    func stop() {
-        host?.events.append(.tapStop)
-    }
-}
-
-@MainActor
 private final class FakeHoldDismiss: HoldToCommitDismissing {
     weak var host: FakeSwitcherHost?
     var onModifierRelease: (() -> Void)?
+    var notedKeyCodes: [UInt16] = []
 
     func beginSession() {
         host?.events.append(.dismissorBegin)
@@ -473,18 +523,23 @@ private final class FakeHoldDismiss: HoldToCommitDismissing {
         host?.events.append(.dismissorEnd)
     }
 
-    func noteKeyEvent(_: NSEvent) {}
+    func noteKeyEvent(_ event: NSEvent) {
+        notedKeyCodes.append(event.keyCode)
+    }
 }
 
 @MainActor
 private final class RecordingHotKeys: WindowSwitcherHotKeyRegistering {
     weak var host: FakeSwitcherHost?
+    var registrations: [HotKeyRole: (keyCode: UInt32, modifiers: UInt32)] = [:]
 
     func register(_ role: HotKeyRole, keyCode: UInt32, modifiers: UInt32) throws {
         host?.events.append(.register(role))
+        registrations[role] = (keyCode, modifiers)
     }
 
     func unregister(_ role: HotKeyRole) {
         host?.events.append(.unregister(role))
+        registrations.removeValue(forKey: role)
     }
 }

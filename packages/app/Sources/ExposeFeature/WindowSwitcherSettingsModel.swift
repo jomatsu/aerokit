@@ -5,7 +5,7 @@ import Foundation
 /// controller suspend its global triggers while the recorder is up.
 @MainActor
 public final class WindowSwitcherSettingsModel: ObservableObject {
-    @Published public var hotKeyErrorMessage: String?
+    @Published public var hotKeyErrorMessage: LocalizedStringResource?
     @Published public var isRecording = false
 
     /// Set by the controller: global triggers suspend while a recorder is

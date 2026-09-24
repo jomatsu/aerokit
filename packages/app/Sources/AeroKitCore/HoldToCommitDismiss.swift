@@ -93,8 +93,7 @@ public final class HoldToCommitDismiss {
         triggerModifiersHeldSinceShow = false
     }
 
-    /// Feed a flagsChanged event manually (e.g. from a global tap);
-    /// returns true when the release fired.
+    /// Returns true when a local modifier change commits the selection.
     @discardableResult
     public func noteFlagsChanged(_ event: NSEvent) -> Bool {
         let held = !triggerFlags.isEmpty && event.modifierFlags.isSuperset(of: triggerFlags)

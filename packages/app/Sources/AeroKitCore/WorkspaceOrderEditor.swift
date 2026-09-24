@@ -15,6 +15,7 @@ public struct WorkspaceOrderEditor: View {
     @State private var chipFrames: [String: CGRect] = [:]
     @State private var didLoad = false
     @State private var loadFailed = false
+    @State private var isLoading = false
 
     private static let chipSpace = "workspaceOrderChips"
 
@@ -32,6 +33,11 @@ public struct WorkspaceOrderEditor: View {
             footer
         }
         .onAppear { reload() }
+        // Workspaces come and go in AeroSpace while settings stay open;
+        // re-reading on activation replaces a manual refresh button.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            reload()
+        }
         .onChange(of: store.order) { resortFromStore() }
     }
 
@@ -40,14 +46,14 @@ public struct WorkspaceOrderEditor: View {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                Text("Could not load workspaces from AeroSpace")
+                Text(L10n.tr("Could not load workspaces from AeroSpace"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Button("Retry") { reload() }
+                Button(L10n.tr("Retry")) { reload() }
                     .controlSize(.small)
             }
         } else if entries.isEmpty {
-            Text(didLoad ? "No workspaces found" : "Loading workspaces…")
+            Text(didLoad ? L10n.tr("No workspaces found") : L10n.tr("Loading workspaces…"))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         } else {
@@ -69,6 +75,19 @@ public struct WorkspaceOrderEditor: View {
                     }
                     .zIndex(dragged == entry.name ? 1 : 0)
                     .gesture(dragGesture(for: entry.name))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(entry.name)
+                    .accessibilityValue(entry.keyBinding.map(KeyComboDisplay.symbols) ?? L10n
+                        .tr("No keyboard shortcut"))
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction(named: L10n.tr("Move earlier")) { move(entry.name, by: -1) }
+                    .accessibilityAction(named: L10n.tr("Move later")) { move(entry.name, by: 1) }
+                    .contextMenu {
+                        Button(L10n.tr("Move Earlier")) { move(entry.name, by: -1) }
+                            .disabled(entries.first?.name == entry.name)
+                        Button(L10n.tr("Move Later")) { move(entry.name, by: 1) }
+                            .disabled(entries.last?.name == entry.name)
+                    }
             }
         }
         .coordinateSpace(name: Self.chipSpace)
@@ -105,42 +124,31 @@ public struct WorkspaceOrderEditor: View {
             }
     }
 
-    private var footer: some View {
-        HStack(spacing: 10) {
-            Button {
-                reload()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10))
+    @ViewBuilder private var footer: some View {
+        if store.order != WorkspaceOrderStore.defaultOrder {
+            Button(L10n.tr("Reset to Default")) {
+                store.order = WorkspaceOrderStore.defaultOrder
             }
-            .buttonStyle(.borderless)
-            .help("Reload workspaces")
-
-            if store.order != WorkspaceOrderStore.defaultOrder {
-                Button("Reset to Default") {
-                    store.order = WorkspaceOrderStore.defaultOrder
-                }
-                .buttonStyle(.link)
-                .font(.system(size: 11))
-            }
-
-            Spacer()
+            .buttonStyle(.link)
+            .font(.system(size: 11))
         }
     }
 
     private func reload() {
+        guard !isLoading else { return }
+        isLoading = true
         let load = loadWorkspaces
-        let priority = store.order
         Task {
             let loaded = await BlockingWork.run { () -> [WorkspaceOrderEntry]? in
                 try? load()
             }
+            isLoading = false
             didLoad = true
             if let loaded {
                 loadFailed = false
-                let comparator = WorkspaceOrdering.comparator(priority: priority)
+                let comparator = WorkspaceOrdering.comparator(priority: store.order)
                 entries = loaded.sorted { comparator($0.name, $1.name) }
-            } else if entries.isEmpty {
+            } else {
                 loadFailed = true
             }
         }
@@ -159,6 +167,13 @@ public struct WorkspaceOrderEditor: View {
     /// The full arrangement is stored, not a diff: the chips are the
     /// workspaces that exist right now, and unlisted future ones follow in
     /// natural order.
+    private func move(_ name: String, by offset: Int) {
+        guard let index = entries.firstIndex(where: { $0.name == name }),
+              entries.indices.contains(index + offset) else { return }
+        entries.swapAt(index, index + offset)
+        commitOrder()
+    }
+
     private func commitOrder() {
         store.order = entries.map(\.name)
     }
@@ -176,11 +191,15 @@ private struct WorkspaceOrderChip: View {
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(.tertiary)
             Text(entry.name)
-                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .lineLimit(1)
+                .frame(maxWidth: 160)
+                .help(entry.name)
                 .foregroundStyle(.primary.opacity(0.85))
             if let combo = entry.keyBinding {
                 Text(KeyComboDisplay.symbols(combo))
-                    .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .fixedSize()
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1.5)
@@ -191,7 +210,7 @@ private struct WorkspaceOrderChip: View {
             }
         }
         .padding(.horizontal, 9)
-        .padding(.vertical, 5)
+        .padding(.vertical, 9)
         .background {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(.quaternary.opacity(0.7))

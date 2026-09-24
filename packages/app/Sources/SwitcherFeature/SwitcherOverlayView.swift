@@ -37,9 +37,7 @@ public struct SwitcherOverlayView: View {
             }
             .padding(configuration.padding)
 
-            if preferences.showOverlayHints {
-                OverlayHintFooter(preferences: preferences)
-            }
+            OverlayHintFooter(preferences: preferences)
         }
         .frame(width: contentSize.width, height: contentSize.height)
         .background {
@@ -54,7 +52,7 @@ public struct SwitcherOverlayView: View {
 
     @ViewBuilder private var grid: some View {
         if model.items.isEmpty {
-            Text("No workspaces found. Is AeroSpace running?")
+            Text(L10n.tr("No workspaces found. Is AeroSpace running?"))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.7))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -85,10 +83,7 @@ public struct SwitcherOverlayView: View {
         let columns = columnCount
         let rows = max(1, Int(ceil(Double(model.items.count) / Double(columns))))
         let rowHeight = configuration.snapshotSize.height + configuration.snapshotAppIconSize + 12 + 24
-        var chromeHeight: CGFloat = 26 + 8
-        if preferences.showOverlayHints {
-            chromeHeight += OverlayHintFooter.height
-        }
+        let chromeHeight: CGFloat = 26 + 8 + OverlayHintFooter.height
         return CGSize(
             width: CGFloat(columns) * configuration.snapshotSize.width + CGFloat(columns + 1) * configuration.padding,
             height: CGFloat(rows) * rowHeight + CGFloat(rows + 1) * configuration.padding + chromeHeight
@@ -115,15 +110,15 @@ private struct OverlayHintFooter: View {
             Text(releaseHint)
                 .font(.system(size: 11.5))
                 .foregroundStyle(Color.white.opacity(0.45))
-            HintItem(label: "Cycle", keys: preferences.hotKey.displayKeys)
+            HintItem(label: L10n.tr("Cycle"), keys: preferences.hotKey.displayKeys)
 
             Spacer()
 
-            HintItem(label: "Refresh", keys: preferences.refreshShortcut.displayKeys)
+            HintItem(label: L10n.tr("Refresh"), keys: preferences.refreshShortcut.displayKeys)
             separator
-            HintItem(label: "Settings", keys: preferences.settingsShortcut.displayKeys)
+            HintItem(label: L10n.tr("Settings"), keys: preferences.settingsShortcut.displayKeys)
             separator
-            HintItem(label: "Close", keys: ["esc"])
+            HintItem(label: L10n.tr("Close"), keys: ["esc"])
         }
         .padding(.horizontal, 16)
         .frame(height: Self.height)
@@ -137,7 +132,7 @@ private struct OverlayHintFooter: View {
 
     private var releaseHint: String {
         let modifiers = preferences.hotKey.displayKeys.dropLast().joined()
-        return "Release \(modifiers) to switch"
+        return L10n.tr("Release \(modifiers) to switch")
     }
 
     private var separator: some View {

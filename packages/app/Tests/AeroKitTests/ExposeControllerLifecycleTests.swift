@@ -34,7 +34,6 @@ final class ExposeControllerLifecycleTests: XCTestCase {
         await waitUntil { host.loadsFinished == 1 }
 
         XCTAssertTrue(host.sessions.isEmpty)
-        XCTAssertEqual(host.digitStarts, 0)
         XCTAssertFalse(controller.isActive)
     }
 
@@ -54,7 +53,6 @@ final class ExposeControllerLifecycleTests: XCTestCase {
         XCTAssertEqual(host.edges, [.top])
         XCTAssertEqual(host.sessions[0].tiles.map(\.window.id), [201, 202])
         XCTAssertTrue(controller.isActive)
-        XCTAssertEqual(host.digitStarts, 1)
         XCTAssertEqual(host.entryDeadlines, [120])
     }
 
@@ -68,7 +66,6 @@ final class ExposeControllerLifecycleTests: XCTestCase {
         await waitUntil { !controller.isActive }
 
         XCTAssertTrue(host.sessions.isEmpty)
-        XCTAssertEqual(host.digitStarts, 0)
         XCTAssertEqual(host.hideCount, 0)
         XCTAssertTrue(host.entryDeadlines.isEmpty)
     }
@@ -83,7 +80,6 @@ final class ExposeControllerLifecycleTests: XCTestCase {
         await waitUntil { !controller.isActive }
 
         XCTAssertTrue(host.sessions.isEmpty)
-        XCTAssertEqual(host.digitStarts, 0)
         XCTAssertTrue(host.entryDeadlines.isEmpty)
     }
 
@@ -96,7 +92,6 @@ final class ExposeControllerLifecycleTests: XCTestCase {
         await waitUntil { !controller.isActive }
 
         XCTAssertTrue(host.sessions.isEmpty)
-        XCTAssertEqual(host.digitStarts, 0)
     }
 
     func testEntryDeadlineDoesNotBeginEntryAfterDismiss() async {
@@ -111,7 +106,6 @@ final class ExposeControllerLifecycleTests: XCTestCase {
 
         controller.toggle()
         XCTAssertFalse(controller.isActive)
-        XCTAssertEqual(host.digitStops, 1)
 
         host.fireEntryDeadline()
         XCTAssertEqual(host.beginEntryCount, 0)
@@ -171,8 +165,6 @@ private final class FakeExposeHost {
     var edges: [ExposeOverlayMotion.Edge] = []
     var hideCount = 0
     var beginEntryCount = 0
-    var digitStarts = 0
-    var digitStops = 0
     var entryDeadlines: [Int] = []
     var loadsFinished = 0
     private var pendingEntry: [@MainActor () -> Void] = []
@@ -203,14 +195,6 @@ private final class FakeExposeHost {
             },
             beginEntry: { [weak self] in
                 self?.beginEntryCount += 1
-            },
-            isAccessibilityGranted: { true },
-            startDigitTap: { [weak self] in
-                self?.digitStarts += 1
-                return true
-            },
-            stopDigitTap: { [weak self] in
-                self?.digitStops += 1
             },
             scheduleEntryDeadline: { [weak self] milliseconds, work in
                 self?.entryDeadlines.append(milliseconds)

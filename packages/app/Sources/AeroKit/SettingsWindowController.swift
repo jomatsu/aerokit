@@ -3,37 +3,44 @@ import AppKit
 import CoreGraphics
 import SwiftUI
 
-/// Single settings window with one tab per feature plus a General tab for
-/// app-level concerns (permission, login item). Styled after Raycast's
-/// settings: an icon tab bar merged into the title bar, a hairline divider,
-/// and a fixed-size scrolling content area.
+/// Resizable settings window with persistent navigation and per-page scrolling.
 @MainActor
 final class SettingsWindowController {
-    private static let contentSize = NSSize(width: 560, height: 600)
+    private static let contentSize = NSSize(width: 980, height: 760)
 
     private let content: AeroKitSettingsView
+    private let welcome = WelcomePresentation()
     private let onWillShow: () -> Void
     private var window: NSWindow?
     /// Never removed: the coordinator keeps this controller for the app's
     /// lifetime, and a nonisolated deinit could not touch it anyway.
+    private var languageObserver: (any NSObjectProtocol)?
     private var activationObserver: (any NSObjectProtocol)?
 
     init(
         client: AeroSpaceClient,
-        switcherPane: some View,
-        exposePane: some View,
-        swipePane: some View,
+        workspacesPane: some View,
+        windowsPane: some View,
+        previewPane: some View,
+        welcomeFeatures: [WelcomeFeature],
         onWillShow: @escaping () -> Void
     ) {
         let general = GeneralSettingsModel(client: client)
         content = AeroKitSettingsView(
             generalModel: general,
-            switcherPane: AnyView(switcherPane),
-            exposePane: AnyView(exposePane),
-            swipePane: AnyView(swipePane)
+            welcome: welcome,
+            welcomeFeatures: welcomeFeatures,
+            workspacesPane: AnyView(workspacesPane),
+            windowsPane: AnyView(windowsPane),
+            previewPane: AnyView(previewPane)
         )
         self.onWillShow = onWillShow
 
+        languageObserver = NotificationCenter.default.addObserver(
+            forName: LanguagePreferences.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.window?.title = L10n.tr("AeroKit Settings") }
+        }
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -59,14 +66,16 @@ final class SettingsWindowController {
             let hostingView = NSHostingView(rootView: content)
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: Self.contentSize),
-                styleMask: [.titled, .closable, .fullSizeContentView],
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
-            window.title = "AeroKit"
+            window.title = L10n.tr("AeroKit Settings")
+            window.contentMinSize = NSSize(width: 880, height: 620)
+            window.setFrameAutosaveName("AeroKitSettings")
             window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
-            window.isMovableByWindowBackground = true
+            window.titleVisibility = .visible
+            window.isMovableByWindowBackground = false
             window.contentView = hostingView
             window.isReleasedWhenClosed = false
             window.center()
@@ -76,106 +85,93 @@ final class SettingsWindowController {
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
+
+    /// Opens the welcome tour as a sheet over the settings window.
+    func presentWelcome() {
+        welcome.isPresented = true
+    }
+}
+
+/// Whether the welcome tour sheet is up; shared by the window controller,
+/// which opens it on first launch, and the General page's replay button.
+@MainActor
+final class WelcomePresentation: ObservableObject {
+    static let shownKey = "welcome.shown"
+
+    @Published var isPresented = false
+
+    func finish() {
+        isPresented = false
+        UserDefaults.standard.set(true, forKey: Self.shownKey)
+    }
 }
 
 // MARK: - Root view
 
 struct AeroKitSettingsView: View {
     @ObservedObject var generalModel: GeneralSettingsModel
-    let switcherPane: AnyView
-    let exposePane: AnyView
-    let swipePane: AnyView
+    @ObservedObject var welcome: WelcomePresentation
+    let welcomeFeatures: [WelcomeFeature]
+    let workspacesPane: AnyView
+    let windowsPane: AnyView
+    let previewPane: AnyView
 
-    @State private var selectedTab = Tab.general
-
-    enum Tab: String, CaseIterable {
-        case general = "General"
-        case switcher = "Switcher"
-        case expose = "Exposé"
-        case swipe = "Swipe"
-
-        var icon: String {
-            switch self {
-            case .general: "gearshape"
-            case .switcher: "rectangle.3.group"
-            case .expose: "square.grid.2x2"
-            case .swipe: "hand.draw"
-            }
-        }
-    }
+    @State private var selected: SettingsDestination = .general
+    @State private var visited: Set<SettingsDestination> = [.general]
 
     var body: some View {
-        VStack(spacing: 0) {
-            tabBar
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("AeroKit").font(.title2.bold()).padding(.horizontal, 20).padding(.top, 24)
+                List(selection: $selected) {
+                    ForEach(SettingsDestination.allCases) { destination in
+                        Label(destination.title, systemImage: destination.icon)
+                            .padding(.vertical, 7)
+                            .tag(destination)
+                    }
+                }
+                .listStyle(.sidebar)
+            }
+            .frame(width: 190)
+            .background(SettingsBackdrop())
             Divider()
-            ScrollView {
-                pane
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 24)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            SettingsBackdrop().ignoresSafeArea()
-        }
-    }
-
-    @ViewBuilder private var pane: some View {
-        switch selectedTab {
-        case .general:
-            GeneralSettingsView(model: generalModel)
-        case .switcher:
-            switcherPane
-        case .expose:
-            exposePane
-        case .swipe:
-            swipePane
-        }
-    }
-
-    /// Raycast-style tab strip living in the (transparent) title bar area:
-    /// traffic lights sit at the left, the icon tabs are centered.
-    private var tabBar: some View {
-        HStack(spacing: 10) {
-            ForEach(Tab.allCases, id: \.self) { tab in
-                TabButton(tab: tab, isSelected: tab == selectedTab) {
-                    selectedTab = tab
+            // Keep visited scroll views alive so each page retains its own position.
+            ZStack {
+                ForEach(SettingsDestination.allCases.filter { visited.contains($0) }) { destination in
+                    ScrollView {
+                        pane(destination)
+                            .frame(maxWidth: 760, alignment: .leading)
+                            .padding(28)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    .opacity(selected == destination ? 1 : 0)
+                    .allowsHitTesting(selected == destination)
+                    .disabled(selected != destination)
+                    .accessibilityHidden(selected != destination)
                 }
             }
+            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 6)
-        .padding(.bottom, 6)
+        .environment(\.locale, LanguagePreferences.shared.selected.locale)
+        .environment(\.openSettingsDestination) { selected = $0 }
+        .sheet(isPresented: $welcome.isPresented) {
+            WelcomeView(model: generalModel, features: welcomeFeatures) { welcome.finish() }
+                .environment(\.locale, LanguagePreferences.shared.selected.locale)
+        }
+        .onChange(of: selected) {
+            KeyRecordingSession.shared.stop()
+            visited.insert(selected)
+            generalModel.refreshStatus()
+        }
     }
-}
 
-private struct TabButton: View {
-    let tab: AeroKitSettingsView.Tab
-    let isSelected: Bool
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: tab.icon)
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(height: 18)
-                Text(tab.rawValue)
-                    .font(.system(size: 10.5, weight: .medium))
-            }
-            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-            .frame(width: 72, height: 46)
-            .background {
-                if isSelected || isHovering {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(.primary.opacity(isSelected ? 0.08 : 0.04))
-                }
-            }
-            .contentShape(Rectangle())
+    @ViewBuilder
+    private func pane(_ destination: SettingsDestination) -> some View {
+        switch destination {
+        case .general: GeneralSettingsView(model: generalModel) { welcome.isPresented = true }
+        case .workspaces: workspacesPane
+        case .windows: windowsPane
+        case .previews: previewPane
         }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
     }
 }

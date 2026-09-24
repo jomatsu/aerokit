@@ -59,10 +59,12 @@ if CommandLine.arguments.contains("--workspace-changed") {
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: AppCoordinator?
     private var observers: [any NSObjectProtocol] = []
+    private var terminationSignal: (any DispatchSourceSignal)?
+    private var isTerminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Two instances would register duplicate Carbon hotkeys and event
-        // taps. LaunchServices dedups `open` launches of the same bundle;
+        // Two instances would register duplicate Carbon hotkeys and swipe
+        // monitors. LaunchServices dedups `open` launches of the same bundle;
         // this catches raw-binary or second-copy launches it doesn't see.
         let current = NSRunningApplication.current
         let executableName = current.executableURL?.lastPathComponent
@@ -73,7 +75,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // Dev ("AeroKit Dev") and release ("AeroKit") installs use
             // different bundle identifiers on purpose, but they fight over
-            // the same hotkeys and event taps — the shared name family
+            // the same hotkeys and swipe monitors — the shared name family
             // means the other install is running.
             if let executableName, executableName.hasPrefix("AeroKit"),
                app.executableURL?.lastPathComponent.hasPrefix("AeroKit") == true
@@ -86,6 +88,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             fputs("AeroKit: another instance is already running; exiting\n", stderr)
             exit(0)
         }
+
+        // Installers send SIGTERM. Route it through the same capture drain as
+        // Quit instead of exiting while replayd still handles capture requests.
+        signal(SIGTERM, SIG_IGN)
+        let terminationSignal = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        terminationSignal.setEventHandler { AppTermination.terminate() }
+        terminationSignal.resume()
+        self.terminationSignal = terminationSignal
 
         NSApp.setActivationPolicy(.accessory)
         // A launcher may have started us hidden (`open -j`); a hidden app
@@ -119,6 +129,23 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminating else { return .terminateLater }
+        isTerminating = true
+        Task.detached {
+            await WindowImageCapturer.finishCapturesForTermination()
+            // terminateLater runs a nested event loop. A SIGTERM callback
+            // already owns the main dispatch queue, so reply through the
+            // run loop rather than queueing a main-actor task behind it.
+            RunLoop.main.perform(inModes: [.common]) {
+                MainActor.assumeIsolated {
+                    NSApp.reply(toApplicationShouldTerminate: true)
+                }
+            }
+        }
+        return .terminateLater
+    }
+
     /// Distributed payloads are plain strings here, so the observer hands
     /// the handler a Sendable dictionary instead of the non-Sendable
     /// Notification — the values are extracted on the posting hop's queue
@@ -144,3 +171,18 @@ let app = NSApplication.shared
 private let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
+
+/// Quit that also works while a sheet (the welcome tour) is up: AppKit
+/// ignores `terminate` while a window has a sheet attached, which would
+/// leave installers waiting on a process that never exits.
+@MainActor
+enum AppTermination {
+    static func terminate() {
+        for window in NSApp.windows {
+            if let sheet = window.attachedSheet {
+                window.endSheet(sheet)
+            }
+        }
+        NSApp.terminate(nil)
+    }
+}

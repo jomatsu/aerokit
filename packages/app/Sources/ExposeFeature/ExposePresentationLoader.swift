@@ -67,7 +67,8 @@ enum ExposePresentationLoader {
     static func appContext(
         client: AeroSpaceClient,
         windowBounds: @escaping @Sendable () -> [CGWindowID: CGRect],
-        preview: @escaping @Sendable (String) -> NSImage?
+        preview: @escaping @Sendable (String) -> NSImage?,
+        previousApp: PreviousApplicationTracker.Application? = nil
     ) async -> PresentationContext? {
         // The bounds query talks to the WindowServer, not the CLI, so it can
         // overlap the dependent CLI round trips; the drop-bar content is
@@ -84,9 +85,16 @@ enum ExposePresentationLoader {
             log.error("app exposé: no focused window")
             return nil
         }
+        // AeroKit's own settings window in front (e.g. after Try): show the
+        // app the user came from, not AeroKit.
+        let target = if focused.pid == ProcessInfo.processInfo.processIdentifier, let previousApp {
+            (bundleIdentifier: previousApp.bundleIdentifier, pid: Optional(previousApp.pid), isFocused: false)
+        } else {
+            (bundleIdentifier: focused.bundleIdentifier, pid: focused.pid, isFocused: true)
+        }
         guard var snapshot = await BlockingWork.run({
             loadSnapshot("app") {
-                try client.appWindows(bundleIdentifier: focused.bundleIdentifier, pid: focused.pid)
+                try client.appWindows(bundleIdentifier: target.bundleIdentifier, pid: target.pid)
             }
         }) else {
             return nil
@@ -96,7 +104,7 @@ enum ExposePresentationLoader {
         snapshot.screenNumber = focused.screenNumber ?? snapshot.screenNumber
         return await PresentationContext(
             snapshot: snapshot,
-            focusedWindowID: focused.id,
+            focusedWindowID: target.isFocused ? focused.id : snapshot.windows.first?.id ?? focused.id,
             bounds: bounds,
             workspaceTargets: dropBar.targets,
             workspacePreviews: dropBar.previews

@@ -10,11 +10,16 @@ final class SwitcherSettingsModel: ObservableObject {
     @Published private(set) var isRefreshingSnapshots = false
     @Published private(set) var refreshProgress: (completed: Int, total: Int)?
     @Published private(set) var lastErrorMessage: String?
-    @Published private(set) var hotKeyErrorMessage: String?
+    @Published private(set) var hotKeyErrorMessage: LocalizedStringResource?
 
     let preferences: AppPreferences
     let workspaceOrder: WorkspaceOrderStore
     let loadWorkspaces: @Sendable () throws -> [WorkspaceOrderEntry]
+
+    var onShowSwitcher: (() -> Void)?
+    var onDeleteSnapshots: (() -> Void)?
+    @Published private(set) var isDeletingSnapshots = false
+    @Published private(set) var deleteError: String?
 
     var onRefreshSnapshots: (() -> Bool)?
     var onHotKeyRecordingChanged: ((Bool) -> Void)?
@@ -61,11 +66,25 @@ final class SwitcherSettingsModel: ObservableObject {
         onHotKeyRecordingChanged?(isRecording)
     }
 
-    func markHotKeyRegistration(error message: String?) {
+    func markHotKeyRegistration(error message: LocalizedStringResource?) {
         hotKeyErrorMessage = message
     }
 
+    func deleteSnapshots() {
+        guard !isDeletingSnapshots else { return }
+        isDeletingSnapshots = true
+        deleteError = nil
+        onDeleteSnapshots?()
+    }
+
+    func markSnapshotsDeleted(error: String?) {
+        isDeletingSnapshots = false
+        deleteError = error
+        refreshStatus()
+    }
+
     func refreshSnapshots() {
+        guard !isDeletingSnapshots else { return }
         if onRefreshSnapshots?() != true {
             refreshStatus()
         }
